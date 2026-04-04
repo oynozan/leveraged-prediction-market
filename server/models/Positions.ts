@@ -1,7 +1,7 @@
 import mongoose, { Schema, type Model, type Document, Types } from "mongoose";
 
 export interface IPosition {
-    user: Types.ObjectId;
+    wallet: string;
     conditionId: string;
     outcome: "Yes" | "No";
     leverage: string;
@@ -10,6 +10,9 @@ export interface IPosition {
     positionValue: number;
     liqPrice: number;
     status: "open" | "closed";
+    question?: string;
+    slug?: string;
+    orderId?: string;
 }
 
 export interface IPositionDocument extends IPosition, Document {
@@ -20,7 +23,7 @@ export interface IPositionDocument extends IPosition, Document {
 
 const PositionSchema = new Schema<IPositionDocument>(
     {
-        user: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
+        wallet: { type: String, required: true, index: true },
         conditionId: { type: String, required: true },
         outcome: { type: String, enum: ["Yes", "No"], required: true },
         leverage: { type: String, required: true },
@@ -29,6 +32,9 @@ const PositionSchema = new Schema<IPositionDocument>(
         positionValue: { type: Number, required: true },
         liqPrice: { type: Number, required: true },
         status: { type: String, enum: ["open", "closed"], default: "open" },
+        question: { type: String },
+        slug: { type: String },
+        orderId: { type: String },
     },
     { timestamps: true, versionKey: false },
 );

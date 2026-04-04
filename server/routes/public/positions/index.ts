@@ -6,9 +6,8 @@ const router = Router();
 
 router.get("/", authRequired, async (req, res) => {
     try {
-        const user = req.user as import("mongoose").Document;
         const positions = await Position.find(
-            { user: user._id, status: "open" },
+            { wallet: req.user!.wallet, status: "open" },
         ).lean();
 
         res.json(positions);

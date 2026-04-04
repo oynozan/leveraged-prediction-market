@@ -1,8 +1,8 @@
 import jwt from "jsonwebtoken";
 import type { NextFunction, Request, Response } from "express";
 
-import UserDB from "../models/Users";
 import { getKey } from "../lib/utils";
+import { getUser, getIdTokenFromHeaders } from "../lib/privy";
 
 /**
  * Server-to-server token verification middleware
@@ -34,34 +34,18 @@ export const verifyServerToken = (req: Request, res: Response, next: NextFunctio
 };
 
 /**
- * User token verification middleware
- * Used to identify the user making the request
+ * Privy user token verification middleware
+ * Reads privy-id-token from headers, verifies via Privy, and sets req.user
  */
-export const userToken = (req: Request, res: Response, next: NextFunction): void => {
-    // Get user cookie
-    const rawJWT = req.cookies.auth;
-
-    if (rawJWT) {
-        jwt.verify(rawJWT, process.env.JWT_SECRET!, async (err: any, decoded: any) => {
-            if (err) {
-                res.status(403).json({ error: "Invalid or expired token" });
-                return;
-            }
-
-            if (!decoded) return next();
-
-            // Get user object
-            const user = await UserDB.findOne({ wallet: decoded.wallet });
-            if (!user) {
-                res.status(404).json({ error: "User not found" });
-                return;
-            }
-
-            // Attach decoded user data to request object for use in route handlers
+export const userToken = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const idToken = getIdTokenFromHeaders(req);
+    if (idToken) {
+        const user = await getUser(idToken);
+        if (user) {
             req.user = user;
-            next();
-        });
-    } else next();
+        }
+    }
+    next();
 };
 
 export const authRequired = (req: Request, res: Response, next: NextFunction): void => {

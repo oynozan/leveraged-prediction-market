@@ -9,6 +9,9 @@ export interface MarginInfo {
 
 export async function getUserMargin(address: string): Promise<MarginInfo> {
     const vault = getVaultContract();
+    if (!vault) {
+        return { total: "0", locked: "0", available: "0" };
+    }
     const [total, locked, available] = await vault.getMargin(address);
 
     return {

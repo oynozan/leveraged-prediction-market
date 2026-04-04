@@ -1,7 +1,7 @@
-import axios from "axios";
+import { proxyAxios } from "../lib/proxy-axios";
 import Market from "../models/Markets";
 
-const CLOB_API = "https://clob.polymarket.com";
+const CLOB_API = process.env.CLOB_API_URL || "https://clob.polymarket.com";
 
 type Level = { price: string; size: string };
 
@@ -16,8 +16,8 @@ export async function fetchMergedBook(conditionId: string) {
     if (!market) return null;
 
     const [yesBook, noBook] = await Promise.all([
-        axios.get(`${CLOB_API}/book`, { params: { token_id: market.tokens.Yes.tokenId } }),
-        axios.get(`${CLOB_API}/book`, { params: { token_id: market.tokens.No.tokenId } }),
+        proxyAxios.get(`${CLOB_API}/book`, { params: { token_id: market.tokens.Yes.tokenId } }),
+        proxyAxios.get(`${CLOB_API}/book`, { params: { token_id: market.tokens.No.tokenId } }),
     ]);
 
     const combinedBids = [...(yesBook.data.bids ?? []), ...invert(noBook.data.asks ?? [])]
@@ -53,7 +53,7 @@ export async function fetchPriceHistory(conditionId: string, interval = "all", f
     ).lean();
     if (!market) return null;
 
-    const { data } = await axios.get(`${CLOB_API}/prices-history`, {
+    const { data } = await proxyAxios.get(`${CLOB_API}/prices-history`, {
         params: { market: market.tokens.Yes.tokenId, interval, fidelity },
     });
 

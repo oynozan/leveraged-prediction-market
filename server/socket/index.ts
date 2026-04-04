@@ -1,9 +1,9 @@
-import cookie from "cookie";
 import jwt from "jsonwebtoken";
 import type { Server as HTTPServer } from "http";
 import { type Namespace, Server, type Socket } from "socket.io";
 
 import { getKey } from "../lib/utils";
+import { getUser } from "../lib/privy";
 
 export function socketServer(server: HTTPServer) {
     const io = new Server(server, {
@@ -29,40 +29,16 @@ export abstract class SocketListener {
 }
 
 export class SocketAuthentication {
-    private static getToken(socket: Socket) {
-        let token: string | undefined;
-
-        const rawCookie = socket.handshake.headers.cookie;
-        if (rawCookie) {
-            const cookies = cookie.parse(rawCookie);
-            if (cookies.session) token = cookies.session;
-        }
-
-        if (!token && socket.handshake.auth?.token) {
-            token = socket.handshake.auth.token;
-        }
-
-        if (!token) {
-            return false;
-        }
-
-        return token;
-    }
-
     public static authenticationMiddleware(io: Server) {
-        io.use((socket, next) => {
+        io.use(async (socket, next) => {
             try {
-                const token = SocketAuthentication.getToken(socket);
+                const token = socket.handshake.auth?.token;
                 if (!token) return next(new Error("Unauthorized"));
 
-                const secret = process.env.JWT_SECRET!;
-                const decoded = jwt.verify(token, secret) as null | {
-                    wallet: string;
-                };
+                const user = await getUser(token);
+                if (!user) return next(new Error("Forbidden"));
 
-                if (!decoded || !decoded?.wallet) return next(new Error("Forbidden"));
-
-                socket.user = decoded;
+                socket.user = user;
                 next();
             } catch (e) {
                 console.error(e);
@@ -75,7 +51,7 @@ export class SocketAuthentication {
     public static serverOnlyAuthenticationMiddleware(io: Namespace) {
         io.use((socket, next) => {
             try {
-                const token = SocketAuthentication.getToken(socket);
+                const token = socket.handshake.auth?.token;
                 if (!token) return next(new Error("Unauthorized"));
 
                 jwt.verify(token, getKey(), {

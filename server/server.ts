@@ -3,7 +3,6 @@ require("dotenv").config();
 import cors from "cors";
 import helmet from "helmet";
 import mongoose from "mongoose";
-import cookieParser from "cookie-parser";
 import rateLimit from "express-rate-limit";
 import express, { type Application } from "express";
 
@@ -31,7 +30,6 @@ app.use(
     }),
 );
 app.use(express.json());
-app.use(cookieParser());
 
 // Routes
 app.use("/", userToken, publicRoutes);

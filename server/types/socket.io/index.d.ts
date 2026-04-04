@@ -1,8 +1,11 @@
 import "socket.io";
-import type { IUser } from "../../models/Users";
 
 declare module "socket.io" {
     interface Socket {
-        user?: IUser
+        user?: {
+            wallet: string;
+            id: string;
+            email?: string;
+        }
     }
 }
