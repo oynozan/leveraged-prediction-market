@@ -1,0 +1,6 @@
+{
+  "schedule": "0 */1 * * * *",
+  "gammaApiUrl": "https://gamma-api.polymarket.com",
+  "backendSyncUrl": "http://localhost:5000/protected/markets/sync",
+  "marketLimit": 10
+}
