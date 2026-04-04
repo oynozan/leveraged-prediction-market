@@ -2,28 +2,35 @@
 
 import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
+import { getPositions } from "@/lib/api";
+import { usePrivy } from "@privy-io/react-auth";
 import type { Position } from "@/lib/types";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL!;
 
 const tabs = ["Positions", "Open Orders", "Trade History", "Order History"];
 
 export function PositionsTable() {
     const [positions, setPositions] = useState<Position[]>([]);
+    const { authenticated } = usePrivy();
 
     useEffect(() => {
-        async function fetchPositions() {
+        if (!authenticated) return;
+
+        let cancelled = false;
+        async function load() {
             try {
-                const res = await fetch(`${API_URL}/positions`, {
-                    credentials: "include",
-                });
-                if (res.ok) setPositions(await res.json());
+                const data = await getPositions();
+                if (!cancelled) setPositions(data.filter((p) => p.status === "open"));
             } catch {
                 /* ignore */
             }
         }
-        fetchPositions();
-    }, []);
+        load();
+        const interval = setInterval(load, 10_000);
+        return () => {
+            cancelled = true;
+            clearInterval(interval);
+        };
+    }, [authenticated]);
 
     return (
         <div className="h-full bg-(--surface) overflow-auto">
@@ -82,11 +89,15 @@ export function PositionsTable() {
                                             )}
                                         >
                                             {pos.outcome}{" "}
-                                            <span className="text-[9px]">{pos.leverage}</span>
+                                            <span className="text-[9px]">{pos.leverage}x</span>
                                         </span>
                                     </td>
                                     <td className="px-3 py-1.5 text-foreground max-w-[200px] truncate">
-                                        {pos.conditionId.slice(0, 10)}...
+                                        {pos.question
+                                            ? pos.question.length > 40
+                                                ? pos.question.slice(0, 40) + "..."
+                                                : pos.question
+                                            : pos.conditionId.slice(0, 10) + "..."}
                                     </td>
                                     <td className="px-3 py-1.5 text-right text-foreground">
                                         {pos.shares.toLocaleString("en-US", {
@@ -97,20 +108,15 @@ export function PositionsTable() {
                                         ${pos.positionValue.toFixed(2)}
                                     </td>
                                     <td className="px-3 py-1.5 text-right text-foreground">
-                                        {pos.entryPrice}¢
+                                        {(pos.entryPrice * 100).toFixed(1)}¢
                                     </td>
                                     <td className="px-3 py-1.5 text-right text-foreground">
-                                        {pos.liqPrice}¢
+                                        {(pos.liqPrice * 100).toFixed(1)}¢
                                     </td>
                                     <td className="px-3 py-1.5 text-right">
-                                        <div className="flex items-center justify-end gap-1">
-                                            <button className="px-2 py-0.5 text-[10px] rounded bg-primary/15 text-primary hover:bg-primary/25 transition-colors">
-                                                Market
-                                            </button>
-                                            <button className="px-2 py-0.5 text-[10px] rounded bg-card text-muted-foreground hover:text-foreground transition-colors">
-                                                Limit
-                                            </button>
-                                        </div>
+                                        <button className="px-2 py-0.5 text-[10px] rounded bg-primary/15 text-primary hover:bg-primary/25 transition-colors">
+                                            Close
+                                        </button>
                                     </td>
                                 </tr>
                             ))

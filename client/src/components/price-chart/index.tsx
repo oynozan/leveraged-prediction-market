@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import { createChart, AreaSeries, type IChartApi, type UTCTimestamp } from "lightweight-charts";
+import { createChart, AreaSeries, type IChartApi, type UTCTimestamp, LineSeries } from "lightweight-charts";
 import { cn } from "@/lib/utils";
 import type { PricePoint } from "@/lib/types";
 
@@ -76,10 +76,8 @@ export function PriceChart({ conditionId }: PriceChartProps) {
                     handleScale: true,
                 });
 
-                const areaSeries = chart.addSeries(AreaSeries, {
-                    lineColor: "#82d173",
-                    topColor: "rgba(130,209,115,0.3)",
-                    bottomColor: "rgba(130,209,115,0.0)",
+                const lineSeries = chart.addSeries(LineSeries, {
+                    color: "#82d173",
                     lineWidth: 2,
                     priceFormat: {
                         type: "custom",
@@ -92,7 +90,7 @@ export function PriceChart({ conditionId }: PriceChartProps) {
                     value: d.p * 100,
                 }));
 
-                areaSeries.setData(mapped);
+                lineSeries.setData(mapped);
                 chart.timeScale().fitContent();
                 chartRef.current = chart;
 

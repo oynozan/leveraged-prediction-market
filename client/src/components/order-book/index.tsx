@@ -48,9 +48,6 @@ export function OrderBook() {
                 <button className="text-xs text-foreground border-b-2 border-primary pb-1">
                     Order Book
                 </button>
-                <button className="text-xs text-muted-foreground hover:text-foreground transition-colors pb-1">
-                    Trades
-                </button>
                 {!connected && (
                     <span className="ml-auto text-[10px] text-yellow-500">reconnecting…</span>
                 )}
@@ -74,7 +71,7 @@ export function OrderBook() {
                                 className="grid grid-cols-3 px-3 py-[3px] text-[11px] relative"
                             >
                                 <div
-                                    className="absolute inset-0 bg-loss/8 origin-right"
+                                    className="absolute inset-0 bg-loss/14 origin-right"
                                     style={{ width: `${fillPercent}%`, marginLeft: "auto" }}
                                 />
                                 <span className="relative text-loss">
@@ -110,7 +107,7 @@ export function OrderBook() {
                             className="grid grid-cols-3 px-3 py-[3px] text-[11px] relative"
                         >
                             <div
-                                className="absolute inset-0 bg-success/8 origin-right"
+                                className="absolute inset-0 bg-success/14 origin-right"
                                 style={{ width: `${fillPercent}%`, marginLeft: "auto" }}
                             />
                             <span className="relative text-success">
