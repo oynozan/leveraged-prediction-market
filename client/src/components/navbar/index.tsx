@@ -3,24 +3,43 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { usePrivy } from "@privy-io/react-auth";
 import { cn } from "@/lib/utils";
-import { Menu, X } from "lucide-react";
+import { useUsdcBalance } from "@/hooks/use-usdc-balance";
+import { Menu, X, LogOut } from "lucide-react";
 
 const navLinks = [
-    { label: "Markets", href: "/markets" },
-    { label: "Trade", href: "/trade" },
+    { label: "Trade", href: "/" },
     { label: "Portfolio", href: "/portfolio" },
     { label: "LP Dashboard", href: "/lp" },
 ];
+
+function formatUsdcDisplay(raw: string): string {
+    const num = parseFloat(raw);
+    return num.toLocaleString("en-US", {
+        style: "currency",
+        currency: "USD",
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+    });
+}
 
 function isActive(pathname: string, href: string) {
     if (href === "/trade") return pathname.startsWith("/trade");
     return pathname === href;
 }
 
+function truncateAddress(address: string) {
+    return `${address.slice(0, 6)}...${address.slice(-4)}`;
+}
+
 export function Navbar() {
     const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
     const pathname = usePathname();
+    const { ready, authenticated, login, logout, user } = usePrivy();
+
+    const walletAddress = user?.wallet?.address;
+    const usdcBalance = useUsdcBalance(walletAddress);
 
     return (
         <header className="border-b border-border bg-(--surface) relative shrink-0">
@@ -51,12 +70,37 @@ export function Navbar() {
                 </div>
 
                 <div className="flex items-center gap-2.5">
-                    <button className="px-3.5 py-1.5 text-sm rounded border border-primary text-primary hover:bg-primary/10 transition-colors">
+                    <Link
+                        href="/deposit"
+                        className="px-3.5 py-1.5 text-sm rounded border border-primary text-primary hover:bg-primary/10 transition-colors"
+                    >
                         Deposit
-                    </button>
-                    <button className="hidden sm:block px-3.5 py-1.5 text-sm rounded bg-card text-muted-foreground hover:text-foreground transition-colors">
-                        0xad...AbD1
-                    </button>
+                    </Link>
+
+                    {ready && authenticated && walletAddress && usdcBalance !== null && (
+                        <div className="hidden sm:flex items-center bg-card px-3 py-1.5 rounded text-sm text-foreground">
+                            {formatUsdcDisplay(usdcBalance)}
+                        </div>
+                    )}
+
+                    {ready && authenticated && walletAddress ? (
+                        <button
+                            onClick={logout}
+                            className="hidden sm:flex items-center gap-1.5 px-3.5 py-1.5 text-sm rounded bg-card text-muted-foreground hover:text-foreground transition-colors"
+                        >
+                            {truncateAddress(walletAddress)}
+                            <LogOut className="w-3.5 h-3.5" />
+                        </button>
+                    ) : (
+                        <button
+                            onClick={login}
+                            disabled={!ready}
+                            className="hidden sm:block px-3.5 py-1.5 text-sm rounded bg-primary text-white hover:bg-primary/90 transition-colors disabled:opacity-50"
+                        >
+                            Connect Wallet
+                        </button>
+                    )}
+
                     <button
                         onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
                         className="md:hidden p-1.5 text-muted-foreground hover:text-foreground transition-colors"
@@ -84,9 +128,24 @@ export function Navbar() {
                                 {link.label}
                             </Link>
                         ))}
-                        <button className="sm:hidden px-3.5 py-2.5 text-sm rounded text-left text-muted-foreground hover:text-foreground transition-colors">
-                            0xad...AbD1
-                        </button>
+
+                        {ready && authenticated && walletAddress ? (
+                            <button
+                                onClick={() => { logout(); setMobileMenuOpen(false); }}
+                                className="sm:hidden px-3.5 py-2.5 text-sm rounded text-left text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1.5"
+                            >
+                                {truncateAddress(walletAddress)}
+                                <LogOut className="w-3.5 h-3.5" />
+                            </button>
+                        ) : (
+                            <button
+                                onClick={() => { login(); setMobileMenuOpen(false); }}
+                                disabled={!ready}
+                                className="sm:hidden px-3.5 py-2.5 text-sm rounded text-left text-primary hover:bg-primary/10 transition-colors disabled:opacity-50"
+                            >
+                                Connect Wallet
+                            </button>
+                        )}
                     </nav>
                 </div>
             )}

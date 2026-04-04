@@ -10,6 +10,7 @@
         "lint": "eslint"
     },
     "dependencies": {
+        "@privy-io/react-auth": "^3.19.0",
         "class-variance-authority": "^0.7.1",
         "clsx": "^2.1.1",
         "lightweight-charts": "^5.1.0",
@@ -20,7 +21,8 @@
         "react-dom": "19.2.4",
         "react-resizable-panels": "^4.9.0",
         "socket.io-client": "^4.8.3",
-        "tailwind-merge": "^3.5.0"
+        "tailwind-merge": "^3.5.0",
+        "viem": "^2.47.4"
     },
     "devDependencies": {
         "@tailwindcss/postcss": "^4",

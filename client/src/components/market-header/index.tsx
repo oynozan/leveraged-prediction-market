@@ -1,4 +1,5 @@
 import type { Market } from "@/lib/types";
+import { ExternalLink } from "lucide-react";
 
 interface MarketHeaderProps {
     market: Market;
@@ -18,10 +19,10 @@ export function MarketHeader({ market }: MarketHeaderProps) {
     return (
         <div className="flex flex-col md:flex-row md:items-center justify-between px-4 py-2 gap-2 border-b border-border bg-(--surface) shrink-0">
             <div className="flex items-center gap-2 min-w-0">
-                <div className="w-6 h-6 rounded-full bg-card flex items-center justify-center shrink-0">
-                    <span className="text-[10px]">📊</span>
-                </div>
-                <span className="text-sm text-foreground truncate">{market.question}</span>
+                <a href={`https://polymarket.com/market/${market.slug}`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 hover:text-primary transition-colors">
+                    <span className="text-sm truncate">{market.question}</span>
+                    <ExternalLink className="w-3 h-3" />
+                </a>
             </div>
 
             <div className="grid grid-cols-2 md:flex md:items-center gap-x-6 gap-y-1 text-xs shrink-0">
