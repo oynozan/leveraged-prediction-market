@@ -51,7 +51,7 @@ export const userToken = (req: Request, res: Response, next: NextFunction): void
             if (!decoded) return next();
 
             // Get user object
-            const user = await UserDB.findOne({ username: decoded.username });
+            const user = await UserDB.findOne({ wallet: decoded.wallet });
             if (!user) {
                 res.status(404).json({ error: "User not found" });
                 return;

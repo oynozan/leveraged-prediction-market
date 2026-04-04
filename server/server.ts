@@ -13,6 +13,7 @@ import protectedRoutes from "./routes/protected";
 import { socketServer } from "./socket";
 import { SocketListeners } from "./socket/listeners";
 import { userToken, verifyServerToken } from "./routes/middleware";
+import { initContracts } from "./lib/contracts";
 
 const app: Application = express();
 const server = require("http").createServer(app);
@@ -50,6 +51,16 @@ async function start() {
     } catch (err) {
         console.error("MongoDB connection error", err);
         process.exit(1);
+    }
+
+    if (process.env.POLYGON_RPC_URL && process.env.OPERATOR_PRIVATE_KEY) {
+        try {
+            initContracts();
+        } catch (err) {
+            console.warn("[contracts] Initialization failed — contract routes will not work:", err);
+        }
+    } else {
+        console.warn("[contracts] POLYGON_RPC_URL or OPERATOR_PRIVATE_KEY not set — skipping contract init");
     }
 
     server.listen(process.env.SERVER_PORT, () =>

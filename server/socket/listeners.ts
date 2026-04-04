@@ -3,6 +3,7 @@ import type { Socket, Server } from "socket.io";
 
 // Listener imports
 import { SocketPing } from "./socket-ping";
+import { SocketMarketData } from "./socket-market-data";
 
 export class SocketListeners {
     private io: Server;
@@ -12,6 +13,7 @@ export class SocketListeners {
 
         this.protectedListeners();
         this.publicListeners();
+        this.marketDataListeners();
     }
 
     protectedListeners() {
@@ -30,6 +32,15 @@ export class SocketListeners {
         // On-connection listeners
         publicIO.on("connection", (socket: Socket) => {
             new SocketPing(this.io, socket).listen();
+        });
+    }
+
+    marketDataListeners() {
+        const marketsIO = this.io.of("/markets");
+
+        marketsIO.on("connection", (socket: Socket) => {
+            console.log(`[market-data] client connected: ${socket.id}`);
+            new SocketMarketData(marketsIO, socket).listen();
         });
     }
 }

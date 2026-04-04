@@ -57,10 +57,10 @@ export class SocketAuthentication {
 
                 const secret = process.env.JWT_SECRET!;
                 const decoded = jwt.verify(token, secret) as null | {
-                    username: string;
+                    wallet: string;
                 };
 
-                if (!decoded || !decoded?.username) return next(new Error("Forbidden"));
+                if (!decoded || !decoded?.wallet) return next(new Error("Forbidden"));
 
                 socket.user = decoded;
                 next();

@@ -132,7 +132,7 @@ async function expectUnauthorizedConnection(
 function issueUserToken() {
     const secret = requireEnv("JWT_SECRET");
 
-    return jwt.sign({ username: "socket-test-user" }, secret, {
+    return jwt.sign({ wallet: "socket-test-user" }, secret, {
         expiresIn: "1m",
     });
 }
