@@ -1,0 +1,28 @@
+{
+    "name": "pred-leverage-contracts",
+    "version": "0.0.1",
+    "description": "Smart contracts for leveraged prediction market platform",
+    "scripts": {
+        "compile": "hardhat compile",
+        "test": "cross-env FORK_POLYGON=1 hardhat test",
+        "test:local": "hardhat test",
+        "deploy:amoy": "hardhat run scripts/deploy.ts --network amoy",
+        "deploy:polygon": "hardhat run scripts/deploy.ts --network polygon",
+        "deploy:sepolia": "hardhat run scripts/deploy.ts --network sepolia",
+        "grant-roles:sepolia": "hardhat run scripts/grant-roles.ts --network sepolia",
+        "grant-roles:amoy": "hardhat run scripts/grant-roles.ts --network amoy",
+        "grant-roles:polygon": "hardhat run scripts/grant-roles.ts --network polygon",
+        "copy-abis": "node scripts/copy-abis.cjs"
+    },
+    "devDependencies": {
+        "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+        "@openzeppelin/contracts": "^5.1.0",
+        "@uniswap/v3-core": "^1.0.1",
+        "@uniswap/v3-periphery": "^1.4.4",
+        "cross-env": "^10.1.0",
+        "dotenv": "^17.4.0",
+        "hardhat": "^2.22.0",
+        "ts-node": "^10.9.0",
+        "typescript": "^5.5.0"
+    }
+}
