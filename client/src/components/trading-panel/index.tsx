@@ -195,6 +195,7 @@ export function TradingPanel({ market }: TradingPanelProps) {
                 amount: numAmount.toString(),
                 leverage,
             });
+            window.dispatchEvent(new CustomEvent("position:created", { detail: result.position }));
             setSuccess(`Position opened — Order ${result.orderId.slice(0, 8)}...`);
             setAmount("");
             setSliderValue(0);

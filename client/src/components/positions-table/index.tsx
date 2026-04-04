@@ -65,6 +65,21 @@ export function PositionsTable() {
         };
     }, [authenticated, getAccessToken]);
 
+    // Instant update via custom event from TradingPanel
+    useEffect(() => {
+        const handler = (e: Event) => {
+            const pos = (e as CustomEvent<Position>).detail;
+            if (!pos?._id) return;
+            setOpenPositions((prev) => {
+                if (prev.some((p) => p._id === pos._id)) return prev;
+                return [pos, ...prev];
+            });
+        };
+
+        window.addEventListener("position:created", handler);
+        return () => window.removeEventListener("position:created", handler);
+    }, []);
+
     // REST polling fallback for open positions
     useEffect(() => {
         if (!authenticated) return;
@@ -81,7 +96,7 @@ export function PositionsTable() {
         }
 
         poll();
-        const interval = setInterval(poll, 10_000);
+        const interval = setInterval(poll, 30_000);
         return () => {
             cancelled = true;
             clearInterval(interval);
@@ -110,14 +125,13 @@ export function PositionsTable() {
     }, [tab, authenticated]);
 
     const handleClose = useCallback(async (positionId: string) => {
-        if (!confirm("Close this position at market price?")) return;
-
         setClosingId(positionId);
         setCloseError(null);
 
         try {
             await closePosition(positionId);
             setOpenPositions((prev) => prev.filter((p) => p._id !== positionId));
+            window.dispatchEvent(new Event("position:closed"));
         } catch (err) {
             setCloseError(err instanceof Error ? err.message : "Failed to close");
         } finally {

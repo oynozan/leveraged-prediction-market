@@ -12,7 +12,6 @@ import { useUsdcBalance } from "@/hooks/use-usdc-balance";
 
 const navLinks = [
     { label: "Trade", href: "/" },
-    { label: "Portfolio", href: "/portfolio" },
     { label: "LP Dashboard", href: "/lp" },
 ];
 

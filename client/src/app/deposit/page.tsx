@@ -282,6 +282,7 @@ export default function DepositPage() {
             setStep("done");
             setAmount("");
             loadBalance();
+            window.dispatchEvent(new Event("balance:update"));
             toast.success("Deposit successful!");
             log("=== VAULT DEPOSIT DONE ===");
         } catch (err: any) {
@@ -328,6 +329,7 @@ export default function DepositPage() {
                     } else {
                         log("No vault configured or no received amount, stopping at bridge-done");
                         setStep("done");
+                        window.dispatchEvent(new Event("balance:update"));
                     }
                 } else if (status.status === "FAILED") {
                     if (bridgePollRef.current) clearInterval(bridgePollRef.current);
@@ -435,6 +437,7 @@ export default function DepositPage() {
             setStep("done");
             setAmount("");
             loadBalance();
+            window.dispatchEvent(new Event("balance:update"));
             toast.success("Deposit successful!");
             log("=== POLYGON DEPOSIT DONE ===");
         } catch (err: any) {
