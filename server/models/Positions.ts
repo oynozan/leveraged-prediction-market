@@ -8,8 +8,11 @@ export interface IPosition {
     shares: number;
     entryPrice: number;
     positionValue: number;
+    marginAmount: number;
+    borrowedAmount: number;
     liqPrice: number;
     status: "open" | "closed";
+    settled: boolean;
     question?: string;
     slug?: string;
     orderId?: string;
@@ -30,8 +33,11 @@ const PositionSchema = new Schema<IPositionDocument>(
         shares: { type: Number, required: true },
         entryPrice: { type: Number, required: true },
         positionValue: { type: Number, required: true },
+        marginAmount: { type: Number, required: true, default: 0 },
+        borrowedAmount: { type: Number, required: true, default: 0 },
         liqPrice: { type: Number, required: true },
         status: { type: String, enum: ["open", "closed"], default: "open" },
+        settled: { type: Boolean, default: false },
         question: { type: String },
         slug: { type: String },
         orderId: { type: String },

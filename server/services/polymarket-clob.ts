@@ -275,8 +275,10 @@ export async function placeMarketOrder(params: {
     tickSize?: string;
     feeRateBps?: number;
 }): Promise<PlaceOrderResult> {
+    console.log(`[CLOB] placeMarketOrder tokenId=${params.tokenId} price=${params.price} amount=${params.amount} side=${params.side} negRisk=${params.negRisk}`);
     const tickSize = params.tickSize || await fetchTickSize(params.tokenId);
     const feeRateBps = params.feeRateBps ?? await fetchFeeRate(params.tokenId);
+    console.log(`[CLOB] tickSize=${tickSize} feeRateBps=${feeRateBps}`);
 
     const signedOrder = await buildAndSignOrder({
         tokenId: params.tokenId,
@@ -317,11 +319,129 @@ export async function placeMarketOrder(params: {
     const ts = Math.floor(Date.now() / 1000).toString();
     const headers = buildL2Headers("POST", path, body, ts);
 
+    console.log(`[CLOB] Sending order to ${CLOB_API}${path}...`);
     const resp = await proxyAxios.post(`${CLOB_API}${path}`, body, {
         headers: { ...headers, "Content-Type": "application/json" },
     });
 
+    console.log(`[CLOB] Order response:`, resp.data);
     return resp.data as PlaceOrderResult;
+}
+
+const USDC_E = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
+const NATIVE_USDC = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359";
+const SWAP_ROUTER = "0xE592427A0AEce92De3Edee1F18E0157C05861564";
+
+export async function getPolymarketWalletBalance(): Promise<bigint> {
+    const wallet = getWallet();
+    const rpc = process.env.POLYGON_RPC_URL;
+    if (!rpc) return 0n;
+    const provider = new ethers.JsonRpcProvider(rpc);
+    const usdc = new ethers.Contract(
+        USDC_E,
+        ["function balanceOf(address) view returns (uint256)"],
+        provider,
+    );
+    const bal: bigint = await usdc.balanceOf(wallet.address);
+    console.log(`[CLOB] getPolymarketWalletBalance(${wallet.address}) = ${bal}`);
+    return bal;
+}
+
+/* ---------- Swap native USDC → USDC.e on polymarket wallet ---------- */
+
+function getPolymarketSigner(): ethers.Wallet {
+    const rpc = process.env.POLYGON_RPC_URL;
+    if (!rpc) throw new Error("POLYGON_RPC_URL not set");
+    const provider = new ethers.JsonRpcProvider(rpc);
+    return getWallet().connect(provider);
+}
+
+/**
+ * Swaps native USDC to USDC.e via Uniswap V3 using the Polymarket wallet.
+ * Called after the Vault sends native USDC to this wallet.
+ */
+export async function swapNativeUsdcToUsdcE(amountMicro: bigint): Promise<void> {
+    console.log(`[CLOB] swapNativeUsdcToUsdcE amount=${amountMicro}`);
+    const signer = getPolymarketSigner();
+
+    const nativeUsdc = new ethers.Contract(
+        NATIVE_USDC,
+        [
+            "function approve(address,uint256) returns (bool)",
+            "function allowance(address,address) view returns (uint256)",
+        ],
+        signer,
+    );
+
+    const currentAllowance: bigint = await nativeUsdc.allowance(signer.address, SWAP_ROUTER);
+    if (currentAllowance < amountMicro) {
+        console.log("[CLOB] Approving SwapRouter for native USDC...");
+        const approveTx = await nativeUsdc.approve(SWAP_ROUTER, ethers.MaxUint256);
+        await approveTx.wait();
+        console.log("[CLOB] SwapRouter approved");
+    }
+
+    const router = new ethers.Contract(
+        SWAP_ROUTER,
+        [
+            "function exactInputSingle(tuple(address tokenIn, address tokenOut, uint24 fee, address recipient, uint256 deadline, uint256 amountIn, uint256 amountOutMinimum, uint160 sqrtPriceLimitX96)) payable returns (uint256)",
+        ],
+        signer,
+    );
+
+    console.log("[CLOB] Swapping native USDC → USDC.e on Uniswap V3...");
+    const tx = await router.exactInputSingle({
+        tokenIn: NATIVE_USDC,
+        tokenOut: USDC_E,
+        fee: 100,
+        recipient: signer.address,
+        deadline: Math.floor(Date.now() / 1000) + 300,
+        amountIn: amountMicro,
+        amountOutMinimum: (amountMicro * 99n) / 100n,
+        sqrtPriceLimitX96: 0n,
+    });
+    console.log(`[CLOB] Swap tx=${tx.hash}`);
+    await tx.wait();
+    console.log(`[CLOB] Swap confirmed. ${amountMicro} native USDC → USDC.e`);
+}
+
+/* ---------- CTF Exchange approval ---------- */
+
+let _exchangeApproved = false;
+
+/**
+ * One-time max-approval of USDC.e for both CTF Exchange contracts.
+ */
+export async function ensureExchangeApproval(): Promise<void> {
+    if (_exchangeApproved) return;
+    console.log("[CLOB] Checking CTF Exchange approvals...");
+
+    const signer = getPolymarketSigner();
+    const usdce = new ethers.Contract(
+        USDC_E,
+        [
+            "function approve(address,uint256) returns (bool)",
+            "function allowance(address,address) view returns (uint256)",
+        ],
+        signer,
+    );
+
+    const THRESHOLD = ethers.parseUnits("1000000", 6);
+
+    for (const exchange of [CTF_EXCHANGE, NEG_RISK_CTF_EXCHANGE]) {
+        const allowance: bigint = await usdce.allowance(signer.address, exchange);
+        if (allowance < THRESHOLD) {
+            console.log(`[CLOB] Approving ${exchange} for USDC.e...`);
+            const tx = await usdce.approve(exchange, ethers.MaxUint256);
+            await tx.wait();
+            console.log(`[CLOB] Approved ${exchange}`);
+        } else {
+            console.log(`[CLOB] ${exchange} already approved (allowance=${allowance})`);
+        }
+    }
+
+    _exchangeApproved = true;
+    console.log("[CLOB] Exchange approvals OK");
 }
 
 export function checkClobEnv(): void {

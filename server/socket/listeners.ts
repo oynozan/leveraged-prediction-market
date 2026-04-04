@@ -4,12 +4,15 @@ import type { Socket, Server } from "socket.io";
 // Listener imports
 import { SocketPing } from "./socket-ping";
 import { SocketMarketData } from "./socket-market-data";
+import { SocketPositions } from "./socket-positions";
+import { setIO } from "./broadcast";
 
 export class SocketListeners {
     private io: Server;
 
     constructor(io: Server) {
         this.io = io;
+        setIO(io);
 
         this.protectedListeners();
         this.publicListeners();
@@ -32,6 +35,7 @@ export class SocketListeners {
         // On-connection listeners
         publicIO.on("connection", (socket: Socket) => {
             new SocketPing(this.io, socket).listen();
+            new SocketPositions(this.io, socket).listen();
         });
     }
 

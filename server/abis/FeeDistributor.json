@@ -57,6 +57,12 @@
         "type": "address"
       },
       {
+        "indexed": true,
+        "internalType": "bytes32",
+        "name": "conditionId",
+        "type": "bytes32"
+      },
+      {
         "indexed": false,
         "internalType": "uint256",
         "name": "amount",
@@ -69,6 +75,12 @@
   {
     "anonymous": false,
     "inputs": [
+      {
+        "indexed": true,
+        "internalType": "bytes32",
+        "name": "conditionId",
+        "type": "bytes32"
+      },
       {
         "indexed": false,
         "internalType": "uint256",
@@ -183,6 +195,11 @@
   {
     "inputs": [
       {
+        "internalType": "bytes32",
+        "name": "conditionId",
+        "type": "bytes32"
+      },
+      {
         "internalType": "uint256",
         "name": "amount",
         "type": "uint256"
@@ -194,7 +211,13 @@
     "type": "function"
   },
   {
-    "inputs": [],
+    "inputs": [
+      {
+        "internalType": "bytes32",
+        "name": "conditionId",
+        "type": "bytes32"
+      }
+    ],
     "name": "distribute",
     "outputs": [],
     "stateMutability": "nonpayable",
@@ -266,7 +289,7 @@
     "name": "lpPool",
     "outputs": [
       {
-        "internalType": "address",
+        "internalType": "contract ILPPool",
         "name": "",
         "type": "address"
       }
@@ -275,7 +298,13 @@
     "type": "function"
   },
   {
-    "inputs": [],
+    "inputs": [
+      {
+        "internalType": "bytes32",
+        "name": "conditionId",
+        "type": "bytes32"
+      }
+    ],
     "name": "pendingFees",
     "outputs": [
       {

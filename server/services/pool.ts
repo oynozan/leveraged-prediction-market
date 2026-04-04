@@ -1,13 +1,13 @@
 import { getLPPoolContract } from "../lib/contracts";
 
 export interface PoolStats {
-    totalAssets: string;
+    totalDeposited: string;
     totalBorrowed: string;
     availableLiquidity: string;
     utilizationRateBps: string;
     interestRateBps: string;
     sharePrice: string;
-    totalSupply: string;
+    totalShares: string;
 }
 
 export interface LPBalance {
@@ -15,49 +15,33 @@ export interface LPBalance {
     usdcValue: string;
 }
 
-export async function getPoolStats(): Promise<PoolStats> {
+export async function getPoolStats(conditionId: string): Promise<PoolStats> {
     const pool = getLPPoolContract();
 
-    const [totalAssets, totalBorrowed, availableLiquidity, utilRate, interestRate, totalSupply] =
-        await Promise.all([
-            pool.totalAssets(),
-            pool.totalBorrowed(),
-            pool.availableLiquidity(),
-            pool.utilizationRate(),
-            pool.currentInterestRate(),
-            pool.totalSupply(),
-        ]);
-
-    const sharePrice =
-        totalSupply > 0n
-            ? ((totalAssets * 1_000_000n) / totalSupply).toString()
-            : "1000000";
+    const [state, utilRate, interestRate, price] = await Promise.all([
+        pool.getPoolState(conditionId),
+        pool.utilizationRate(conditionId),
+        pool.currentInterestRate(conditionId),
+        pool.sharePrice(conditionId),
+    ]);
 
     return {
-        totalAssets: totalAssets.toString(),
-        totalBorrowed: totalBorrowed.toString(),
-        availableLiquidity: availableLiquidity.toString(),
+        totalDeposited: state.totalDeposited.toString(),
+        totalBorrowed: state.totalBorrowed.toString(),
+        availableLiquidity: state.availableLiquidity.toString(),
         utilizationRateBps: utilRate.toString(),
         interestRateBps: interestRate.toString(),
-        sharePrice,
-        totalSupply: totalSupply.toString(),
+        sharePrice: price.toString(),
+        totalShares: state.totalShares.toString(),
     };
 }
 
-export async function getLPBalance(address: string): Promise<LPBalance> {
+export async function getLPBalance(conditionId: string, address: string): Promise<LPBalance> {
     const pool = getLPPoolContract();
-
-    const [shares, totalAssets, totalSupply] = await Promise.all([
-        pool.balanceOf(address),
-        pool.totalAssets(),
-        pool.totalSupply(),
-    ]);
-
-    const usdcValue =
-        totalSupply > 0n ? ((shares * totalAssets) / totalSupply).toString() : "0";
+    const pos = await pool.getUserPosition(conditionId, address);
 
     return {
-        shares: shares.toString(),
-        usdcValue,
+        shares: pos.userShares.toString(),
+        usdcValue: pos.usdcValue.toString(),
     };
 }

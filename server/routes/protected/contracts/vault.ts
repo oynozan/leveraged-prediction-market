@@ -51,12 +51,12 @@ router.post("/release-margin", async (req, res) => {
 
 router.post("/borrow", async (req, res) => {
     try {
-        const { amount } = req.body;
-        if (!amount) {
-            res.status(400).json({ error: "amount required" });
+        const { conditionId, amount } = req.body;
+        if (!conditionId || !amount) {
+            res.status(400).json({ error: "conditionId and amount required" });
             return;
         }
-        const receipt = await borrowFromPool(amount);
+        const receipt = await borrowFromPool(conditionId, amount);
         res.json({ ok: true, txHash: receipt.hash });
     } catch (err: any) {
         console.error("[vault/borrow] Error:", err);
@@ -66,12 +66,12 @@ router.post("/borrow", async (req, res) => {
 
 router.post("/repay", async (req, res) => {
     try {
-        const { amount } = req.body;
-        if (!amount) {
-            res.status(400).json({ error: "amount required" });
+        const { conditionId, amount } = req.body;
+        if (!conditionId || !amount) {
+            res.status(400).json({ error: "conditionId and amount required" });
             return;
         }
-        const receipt = await repayToPool(amount);
+        const receipt = await repayToPool(conditionId, amount);
         res.json({ ok: true, txHash: receipt.hash });
     } catch (err: any) {
         console.error("[vault/repay] Error:", err);

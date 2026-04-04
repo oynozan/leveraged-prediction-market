@@ -5,6 +5,7 @@ import { executeTrade } from "../../../services/trade";
 const router = Router();
 
 router.post("/", authRequired, async (req: Request, res: Response) => {
+    console.log(`[trade-route] POST /trade from wallet=${req.user?.wallet} body=`, req.body);
     try {
         const { conditionId, outcome, amount, leverage } = req.body;
 
@@ -21,8 +22,8 @@ router.post("/", authRequired, async (req: Request, res: Response) => {
         const numAmount = parseFloat(amount);
         const numLeverage = parseInt(leverage, 10);
 
-        if (isNaN(numAmount) || numAmount <= 0) {
-            res.status(400).json({ error: "amount must be a positive number" });
+        if (isNaN(numAmount) || numAmount < 1) {
+            res.status(400).json({ error: "Minimum position size is $1" });
             return;
         }
 
