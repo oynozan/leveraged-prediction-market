@@ -5,8 +5,7 @@ import { proxyAxios } from "../lib/proxy-axios";
 const CTF_EXCHANGE = "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E";
 const NEG_RISK_CTF_EXCHANGE = "0xC5d563A36AE78145C45a50134d48A1215220f80a";
 
-const USDC_DECIMALS = 6;
-const USDC_SCALE = 10n ** BigInt(USDC_DECIMALS);
+const COLLATERAL_DECIMALS = 6;
 
 const CLOB_API = process.env.CLOB_API_URL || "https://clob.polymarket.com";
 
@@ -39,7 +38,36 @@ const ORDER_TYPES = {
     ],
 };
 
-/* L2 HMAC-SHA256 authentication */
+/* ---------- helpers ---------- */
+
+const ROUNDING_CONFIG: Record<string, { price: number; size: number; amount: number }> = {
+    "0.1": { price: 1, size: 2, amount: 3 },
+    "0.01": { price: 2, size: 2, amount: 4 },
+    "0.001": { price: 3, size: 2, amount: 5 },
+    "0.0001": { price: 4, size: 2, amount: 6 },
+};
+
+function roundDown(num: number, decimals: number): number {
+    if (Number.isInteger(num)) return num;
+    return Math.floor(num * 10 ** decimals) / 10 ** decimals;
+}
+
+function roundUp(num: number, decimals: number): number {
+    if (Number.isInteger(num)) return num;
+    return Math.ceil(num * 10 ** decimals) / 10 ** decimals;
+}
+
+function decimalPlaces(num: number): number {
+    if (Number.isInteger(num)) return 0;
+    const arr = num.toString().split(".");
+    return arr.length <= 1 ? 0 : arr[1].length;
+}
+
+/* ---------- L2 HMAC-SHA256 authentication ---------- */
+
+function getWallet(): ethers.Wallet {
+    return new ethers.Wallet(process.env.POLY_WALLET_PK!);
+}
 
 function buildL2Headers(
     method: string,
@@ -50,37 +78,71 @@ function buildL2Headers(
     const apiKey = process.env.POLY_API_KEY!;
     const apiSecret = process.env.POLY_API_SECRET!;
     const passphrase = process.env.POLY_PASSPHRASE!;
-    const walletPk = process.env.POLY_WALLET_PK!;
-    const wallet = new ethers.Wallet(walletPk);
+    const wallet = getWallet();
 
     const secret = Buffer.from(apiSecret, "base64");
     const msg = timestamp + method + requestPath + body;
     const sig = crypto.createHmac("sha256", secret).update(msg).digest("base64");
+    const sigUrlSafe = sig.replace(/\+/g, "-").replace(/\//g, "_");
 
     return {
-        "POLY-ADDRESS": wallet.address,
-        "POLY-SIGNATURE": sig,
-        "POLY-TIMESTAMP": timestamp,
-        "POLY-API-KEY": apiKey,
-        "POLY-PASSPHRASE": passphrase,
+        POLY_ADDRESS: wallet.address,
+        POLY_SIGNATURE: sigUrlSafe,
+        POLY_TIMESTAMP: timestamp,
+        POLY_API_KEY: apiKey,
+        POLY_PASSPHRASE: passphrase,
     };
 }
 
-/* Order helpers */
+/* ---------- Order helpers ---------- */
 
 const Side = { BUY: 0, SELL: 1 } as const;
 type SideValue = (typeof Side)[keyof typeof Side];
 
-interface OrderParams {
+function generateSalt(): string {
+    return Math.round(Math.random() * Date.now()).toString();
+}
+
+function getMarketOrderRawAmounts(
+    side: SideValue,
+    amount: number,
+    price: number,
+    roundConfig: { price: number; size: number; amount: number },
+): { rawMakerAmt: number; rawTakerAmt: number } {
+    const rawPrice = roundDown(price, roundConfig.price);
+
+    if (side === Side.BUY) {
+        const rawMakerAmt = roundDown(amount, roundConfig.size);
+        let rawTakerAmt = rawMakerAmt / rawPrice;
+        if (decimalPlaces(rawTakerAmt) > roundConfig.amount) {
+            rawTakerAmt = roundUp(rawTakerAmt, roundConfig.amount + 4);
+            if (decimalPlaces(rawTakerAmt) > roundConfig.amount) {
+                rawTakerAmt = roundDown(rawTakerAmt, roundConfig.amount);
+            }
+        }
+        return { rawMakerAmt, rawTakerAmt };
+    }
+
+    const rawMakerAmt = roundDown(amount, roundConfig.size);
+    let rawTakerAmt = rawMakerAmt * rawPrice;
+    if (decimalPlaces(rawTakerAmt) > roundConfig.amount) {
+        rawTakerAmt = roundUp(rawTakerAmt, roundConfig.amount + 4);
+        if (decimalPlaces(rawTakerAmt) > roundConfig.amount) {
+            rawTakerAmt = roundDown(rawTakerAmt, roundConfig.amount);
+        }
+    }
+    return { rawMakerAmt, rawTakerAmt };
+}
+
+async function buildAndSignOrder(params: {
     tokenId: string;
     price: number;
-    size: number;
+    amount: number;
     side: SideValue;
     feeRateBps: number;
     negRisk: boolean;
-}
-
-interface SignedOrder {
+    tickSize: string;
+}): Promise<{
     salt: string;
     maker: string;
     signer: string;
@@ -91,80 +153,111 @@ interface SignedOrder {
     expiration: string;
     nonce: string;
     feeRateBps: string;
-    side: number;
+    side: SideValue;
     signatureType: number;
     signature: string;
-}
+}> {
+    const wallet = getWallet();
+    const addr = wallet.address; // checksummed
 
-function computeAmounts(
-    price: number,
-    size: number,
-    side: SideValue,
-): { makerAmount: bigint; takerAmount: bigint } {
-    const rawPrice = BigInt(Math.round(price * Number(USDC_SCALE)));
-    const rawSize = BigInt(Math.round(size * Number(USDC_SCALE)));
+    const salt = generateSalt();
+    const roundConfig = ROUNDING_CONFIG[params.tickSize] || ROUNDING_CONFIG["0.01"];
 
-    if (side === Side.BUY) {
-        return {
-            makerAmount: (rawSize * rawPrice) / USDC_SCALE,
-            takerAmount: rawSize,
-        };
-    }
-    return {
-        makerAmount: rawSize,
-        takerAmount: (rawSize * rawPrice) / USDC_SCALE,
-    };
-}
+    const { rawMakerAmt, rawTakerAmt } = getMarketOrderRawAmounts(
+        params.side,
+        params.amount,
+        params.price,
+        roundConfig,
+    );
 
-function makeSalt(tokenId: string, side: SideValue, ts: number): bigint {
-    const hash = ethers.keccak256(ethers.toUtf8Bytes(`${tokenId}:${side}:${ts}`));
-    return BigInt(hash);
-}
+    const makerAmount = ethers.parseUnits(rawMakerAmt.toString(), COLLATERAL_DECIMALS).toString();
+    const takerAmount = ethers.parseUnits(rawTakerAmt.toString(), COLLATERAL_DECIMALS).toString();
 
-async function buildAndSignOrder(params: OrderParams): Promise<SignedOrder> {
-    const walletPk = process.env.POLY_WALLET_PK!;
-    const wallet = new ethers.Wallet(walletPk);
+    const feeRateBps = params.feeRateBps.toString();
+    const nonce = "0";
+    const expiration = "0";
 
-    const ts = Math.floor(Date.now() / 1000);
-    const { makerAmount, takerAmount } = computeAmounts(params.price, params.size, params.side);
-    const salt = makeSalt(params.tokenId, params.side, ts);
-
-    const order = {
+    const orderMessage = {
         salt,
-        maker: wallet.address,
-        signer: wallet.address,
+        maker: addr,
+        signer: addr,
         taker: ethers.ZeroAddress,
-        tokenId: BigInt(params.tokenId),
+        tokenId: params.tokenId,
         makerAmount,
         takerAmount,
-        expiration: 0n,
-        nonce: 0n,
-        feeRateBps: BigInt(params.feeRateBps),
+        expiration,
+        nonce,
+        feeRateBps,
         side: params.side,
         signatureType: 0,
     };
 
     const domain = params.negRisk ? NEG_RISK_EIP712_DOMAIN : EIP712_DOMAIN;
-    const signature = await wallet.signTypedData(domain, ORDER_TYPES, order);
+    const signature = await wallet.signTypedData(domain, ORDER_TYPES, orderMessage);
 
     return {
-        salt: salt.toString(),
-        maker: wallet.address,
-        signer: wallet.address,
+        salt,
+        maker: addr,
+        signer: addr,
         taker: ethers.ZeroAddress,
         tokenId: params.tokenId,
-        makerAmount: makerAmount.toString(),
-        takerAmount: takerAmount.toString(),
-        expiration: "0",
-        nonce: "0",
-        feeRateBps: params.feeRateBps.toString(),
+        makerAmount,
+        takerAmount,
+        expiration,
+        nonce,
+        feeRateBps,
         side: params.side,
         signatureType: 0,
         signature,
     };
 }
 
-/* Public API */
+/* ---------- CLOB API fetchers ---------- */
+
+export async function fetchTickSize(tokenId: string): Promise<string> {
+    try {
+        const resp = await proxyAxios.get(`${CLOB_API}/tick-size`, {
+            params: { token_id: tokenId },
+        });
+        return resp.data.minimum_tick_size?.toString() || "0.01";
+    } catch {
+        return "0.01";
+    }
+}
+
+export async function fetchNegRisk(tokenId: string): Promise<boolean> {
+    try {
+        const resp = await proxyAxios.get(`${CLOB_API}/neg-risk`, {
+            params: { token_id: tokenId },
+        });
+        return resp.data.neg_risk === true;
+    } catch {
+        return false;
+    }
+}
+
+export async function fetchFeeRate(tokenId: string): Promise<number> {
+    try {
+        const ts = Math.floor(Date.now() / 1000).toString();
+        const headers = buildL2Headers("GET", "/fee-rate", "", ts);
+        const resp = await proxyAxios.get(`${CLOB_API}/fee-rate`, {
+            params: { token_id: tokenId },
+            headers,
+        });
+        return typeof resp.data.base_fee === "number" ? resp.data.base_fee : 0;
+    } catch {
+        return 0;
+    }
+}
+
+export async function fetchMidpoint(tokenId: string): Promise<number> {
+    const resp = await proxyAxios.get(`${CLOB_API}/midpoint`, {
+        params: { token_id: tokenId },
+    });
+    return parseFloat(resp.data.mid);
+}
+
+/* ---------- Public API ---------- */
 
 export interface PlaceOrderResult {
     success: boolean;
@@ -176,26 +269,50 @@ export interface PlaceOrderResult {
 export async function placeMarketOrder(params: {
     tokenId: string;
     price: number;
-    size: number;
+    amount: number;
     side: SideValue;
     negRisk: boolean;
+    tickSize?: string;
     feeRateBps?: number;
 }): Promise<PlaceOrderResult> {
+    const tickSize = params.tickSize || await fetchTickSize(params.tokenId);
+    const feeRateBps = params.feeRateBps ?? await fetchFeeRate(params.tokenId);
+
     const signedOrder = await buildAndSignOrder({
         tokenId: params.tokenId,
         price: params.price,
-        size: params.size,
+        amount: params.amount,
         side: params.side,
-        feeRateBps: params.feeRateBps ?? 100,
+        feeRateBps,
         negRisk: params.negRisk,
+        tickSize,
     });
 
-    const path = "/order";
-    const body = JSON.stringify({
-        order: signedOrder,
-        owner: signedOrder.maker,
+    const apiKey = process.env.POLY_API_KEY!;
+    const sideStr = signedOrder.side === Side.BUY ? "BUY" : "SELL";
+
+    const orderPayload = {
+        order: {
+            salt: parseInt(signedOrder.salt, 10),
+            maker: signedOrder.maker,
+            signer: signedOrder.signer,
+            taker: signedOrder.taker,
+            tokenId: signedOrder.tokenId,
+            makerAmount: signedOrder.makerAmount,
+            takerAmount: signedOrder.takerAmount,
+            side: sideStr,
+            expiration: signedOrder.expiration,
+            nonce: signedOrder.nonce,
+            feeRateBps: signedOrder.feeRateBps,
+            signatureType: signedOrder.signatureType,
+            signature: signedOrder.signature,
+        },
+        owner: apiKey,
         orderType: "FOK",
-    });
+    };
+
+    const path = "/order";
+    const body = JSON.stringify(orderPayload);
 
     const ts = Math.floor(Date.now() / 1000).toString();
     const headers = buildL2Headers("POST", path, body, ts);
@@ -207,10 +324,10 @@ export async function placeMarketOrder(params: {
     return resp.data as PlaceOrderResult;
 }
 
-export async function fetchMidpoint(tokenId: string): Promise<number> {
-    const resp = await proxyAxios.get(`${CLOB_API}/midpoint`, {
-        params: { token_id: tokenId },
-    });
-
-    return parseFloat(resp.data.mid);
+export function checkClobEnv(): void {
+    const required = ["POLY_API_KEY", "POLY_API_SECRET", "POLY_PASSPHRASE", "POLY_WALLET_PK"];
+    const missing = required.filter((k) => !process.env[k]);
+    if (missing.length > 0) {
+        console.warn(`[CLOB] Missing env vars: ${missing.join(", ")}`);
+    }
 }

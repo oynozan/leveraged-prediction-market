@@ -40,9 +40,17 @@ router.post("/", authRequired, async (req: Request, res: Response) => {
         });
 
         res.json(result);
-    } catch (err: any) {
-        console.error("Trade error:", err);
-        res.status(500).json({ error: err.message || "Trade failed" });
+    } catch (err: unknown) {
+        const raw = (err as any)?.response?.data?.error
+            || (err as any)?.response?.data?.message
+            || (err instanceof Error ? err.message : "Trade failed");
+        const msg = raw.replace(/\b(\d{4,})\b/g, (_: string, n: string) => {
+            const num = parseInt(n, 10);
+            if (num >= 1000) return `$${(num / 1_000_000).toFixed(2)}`;
+            return n;
+        });
+        console.error("Trade error:", msg);
+        res.status(500).json({ error: msg });
     }
 });
 

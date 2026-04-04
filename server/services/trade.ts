@@ -1,7 +1,7 @@
 import { ethers } from "ethers";
 import Market from "../models/Markets";
 import Position from "../models/Positions";
-import { placeMarketOrder, fetchMidpoint } from "./polymarket-clob";
+import { placeMarketOrder, fetchMidpoint, fetchNegRisk } from "./polymarket-clob";
 
 const MAX_SLIPPAGE_BPS = 100;
 const USDC_ADDRESS = process.env.USDC_ADDRESS || "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359";
@@ -55,19 +55,19 @@ export async function executeTrade(params: TradeParams): Promise<TradeResult> {
     // Check USDC balance on Polygon
     const balance = await getUsdcBalance(wallet);
     if (balance < BigInt(marginRequired)) {
-        throw new Error(
-            `Insufficient USDC balance: need ${(marginRequired / 1_000_000).toFixed(2)}, have ${ethers.formatUnits(balance, 6)}`,
-        );
+        console.error(`Insufficient liquidity: need ${marginRequired}, have ${ethers.formatUnits(balance, 6)}`);
+        throw new Error(`Insufficient liquidity`);
     }
 
-    // Place CLOB market order
     const orderPrice = applySlippage(price);
+    const negRisk = await fetchNegRisk(tokenId);
+
     const clobResult = await placeMarketOrder({
         tokenId,
         price: orderPrice,
-        size: shares,
+        amount,
         side: 0,
-        negRisk: false,
+        negRisk,
     });
     const orderId = clobResult.orderID;
 
