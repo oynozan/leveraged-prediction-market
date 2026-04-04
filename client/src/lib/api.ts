@@ -10,6 +10,8 @@ import type {
     BridgeRoute,
     BridgeTxData,
     BridgeStatus,
+    PoolInfo,
+    UserLPSummary,
 } from "./types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL!;
@@ -110,9 +112,9 @@ export async function getOrderBook(conditionId: string): Promise<OrderBookData |
     }
 }
 
-export async function getPositions(): Promise<Position[]> {
+export async function getPositions(status: "open" | "closed" | "all" = "open"): Promise<Position[]> {
     try {
-        const res = await fetchWithWallet(`${API_URL}/positions`, {
+        const res = await fetchWithWallet(`${API_URL}/positions?status=${status}`, {
             cache: "no-store",
         });
 
@@ -142,6 +144,18 @@ export async function placeTrade(params: {
         throw new Error(body.error || "Trade failed");
     }
 
+    return res.json();
+}
+
+// Close position
+export async function closePosition(positionId: string): Promise<Position> {
+    const res = await fetchWithWallet(`${API_URL}/positions/${positionId}/close`, {
+        method: "POST",
+    });
+    if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || "Failed to close position");
+    }
     return res.json();
 }
 
@@ -207,5 +221,22 @@ export async function getBridgeStatus(params: {
 
     const res = await fetch(`${API_URL}/deposit/bridge-status?${qs}`, { cache: "no-store" });
     if (!res.ok) throw new Error("Failed to check bridge status");
+    return res.json();
+}
+
+// LP Pools
+export async function getLPPools(): Promise<PoolInfo[]> {
+    try {
+        const res = await fetch(`${API_URL}/lp/pools`, { cache: "no-store" });
+        if (!res.ok) return [];
+        return res.json();
+    } catch {
+        return [];
+    }
+}
+
+export async function getLPUserSummary(address: string): Promise<UserLPSummary> {
+    const res = await fetch(`${API_URL}/lp/user/${address}`, { cache: "no-store" });
+    if (!res.ok) throw new Error("Failed to fetch LP positions");
     return res.json();
 }

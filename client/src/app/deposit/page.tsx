@@ -22,6 +22,7 @@ import {
     getBridgeStatus,
 } from "@/lib/api";
 import type { DepositConfig, MarginInfo, BridgeRoute } from "@/lib/types";
+import { toast } from "sonner";
 
 const log = (...args: unknown[]) => console.log("[deposit]", ...args);
 
@@ -98,6 +99,7 @@ export default function DepositPage() {
 
     useEffect(() => {
         if (!wallet?.address) return;
+        if (step !== "idle" && step !== "done") return;
         log("Loading margin for", wallet.address);
         getMarginBalance(wallet.address)
             .then(m => { log("Margin:", m); setMargin(m); })
@@ -280,11 +282,14 @@ export default function DepositPage() {
             setStep("done");
             setAmount("");
             loadBalance();
+            toast.success("Deposit successful!");
             log("=== VAULT DEPOSIT DONE ===");
         } catch (err: any) {
             log("=== VAULT DEPOSIT FAILED ===", err);
-            setError(err.shortMessage || err.message || "Vault deposit failed");
+            const msg = err.shortMessage || err.message || "Vault deposit failed";
+            setError(msg);
             setStep("error");
+            toast.error(msg);
         }
     }
 
@@ -351,12 +356,12 @@ export default function DepositPage() {
         log("Amount (raw):", parsedAmount.toString());
         log("Vault:", config.vaultAddress);
 
-        const provider = await wallet.getEthereumProvider();
-        const transport = custom(provider);
-        const walletClient = createWalletClient({ chain: polygon, transport, account: wallet.address as Address });
-        const publicClient = createPublicClient({ chain: polygon, transport });
-
         try {
+            const provider = await wallet.getEthereumProvider();
+            const transport = custom(provider);
+            const walletClient = createWalletClient({ chain: polygon, transport, account: wallet.address as Address });
+            const publicClient = createPublicClient({ chain: polygon, transport });
+
             setStep("approving");
             log("Checking allowance...", {
                 token: selectedToken.address,
@@ -430,11 +435,14 @@ export default function DepositPage() {
             setStep("done");
             setAmount("");
             loadBalance();
+            toast.success("Deposit successful!");
             log("=== POLYGON DEPOSIT DONE ===");
         } catch (err: any) {
             log("=== POLYGON DEPOSIT FAILED ===", err);
-            setError(err.shortMessage || err.message || "Transaction failed");
+            const msg = err.shortMessage || err.message || "Transaction failed";
+            setError(msg);
             setStep("error");
+            toast.error(msg);
         }
     }
 
@@ -453,15 +461,15 @@ export default function DepositPage() {
             fromTokenAddress: bridgeRoute.fromTokenAddress,
         });
 
-        const provider = await wallet.getEthereumProvider();
-        const chain = CHAIN_MAP[selectedChainId];
-        if (!chain) { log("No chain for", selectedChainId); return; }
-
-        const transport = custom(provider);
-        const walletClient = createWalletClient({ chain, transport, account: wallet.address as Address });
-        const publicClient = createPublicClient({ chain, transport });
-
         try {
+            const provider = await wallet.getEthereumProvider();
+            const chain = CHAIN_MAP[selectedChainId];
+            if (!chain) { log("No chain for", selectedChainId); return; }
+
+            const transport = custom(provider);
+            const walletClient = createWalletClient({ chain, transport, account: wallet.address as Address });
+            const publicClient = createPublicClient({ chain, transport });
+
             setStep("approving");
             log("Fetching bridge tx data from server...");
             const txData = await getBridgeTxData(bridgeRoute);
@@ -532,18 +540,29 @@ export default function DepositPage() {
             );
         } catch (err: any) {
             log("=== BRIDGE DEPOSIT FAILED ===", err);
-            setError(err.shortMessage || err.message || "Bridge transaction failed");
+            const msg = err.shortMessage || err.message || "Bridge transaction failed";
+            setError(msg);
             setStep("error");
+            toast.error(msg);
         }
     }
 
     function handleSubmit() {
         log("Submit pressed:", { chainId: selectedChainId, token: selectedSymbol, amount, parsedAmount: parsedAmount.toString(), isPolygon });
         setError(null);
+
+        const onFail = (err: any) => {
+            log("handleSubmit unhandled error:", err);
+            const msg = err?.shortMessage || err?.message || "Transaction failed";
+            setError(msg);
+            setStep("error");
+            toast.error(msg);
+        };
+
         if (isPolygon) {
-            switchToChain(137).then(handlePolygonDeposit);
+            switchToChain(137).then(handlePolygonDeposit).catch(onFail);
         } else {
-            switchToChain(selectedChainId).then(handleBridgeDeposit);
+            switchToChain(selectedChainId).then(handleBridgeDeposit).catch(onFail);
         }
     }
 
@@ -564,7 +583,8 @@ export default function DepositPage() {
 
     const isBusy = step === "quoting" || step === "approving" || step === "depositing"
         || step === "bridging" || step === "bridge-waiting" || step === "vault-depositing";
-    const canSubmit = parsedAmount > 0n && !isBusy && step !== "done" && (isPolygon || bridgeRoute !== null);
+    const MIN_DEPOSIT = parseUnits("1", selectedToken?.decimals ?? 6);
+    const canSubmit = parsedAmount >= MIN_DEPOSIT && !isBusy && step !== "done" && (isPolygon || bridgeRoute !== null);
 
     const formatElapsed = (s: number) => {
         const m = Math.floor(s / 60);
@@ -670,6 +690,9 @@ export default function DepositPage() {
                             {selectedSymbol}
                         </span>
                     </div>
+                    {parsedAmount > 0n && parsedAmount < MIN_DEPOSIT && (
+                        <p className="text-xs text-destructive mt-1">Minimum deposit is $1</p>
+                    )}
                 </div>
 
                 {!isPolygon && bridgeRoute && step === "idle" && (

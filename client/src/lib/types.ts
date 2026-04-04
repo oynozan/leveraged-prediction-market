@@ -45,8 +45,11 @@ export interface Position {
     shares: number;
     entryPrice: number;
     positionValue: number;
+    marginAmount: number;
+    borrowedAmount: number;
     liqPrice: number;
     status: "open" | "closed";
+    settled: boolean;
     question?: string;
     slug?: string;
     orderId?: string;
@@ -125,4 +128,36 @@ export interface BridgeStatus {
         token: { address: string; decimals: number; symbol: string } | null;
         txHash: string | null;
     } | null;
+}
+
+// LP Pool types
+
+export interface PoolInfo {
+    conditionId: string;
+    question: string;
+    slug: string;
+    endDate: string;
+    totalDeposited: string;
+    totalBorrowed: string;
+    availableLiquidity: string;
+    utilizationBps: string;
+    interestRateBps: string;
+    sharePrice: string;
+    totalShares: string;
+}
+
+export interface LPPosition {
+    conditionId: string;
+    question: string;
+    slug: string;
+    shares: string;
+    currentValue: string;
+    poolSharePct: string;
+    apyBps: string;
+}
+
+export interface UserLPSummary {
+    positions: LPPosition[];
+    totalCurrentValue: string;
+    weightedApyBps: string;
 }

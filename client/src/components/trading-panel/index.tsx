@@ -179,8 +179,8 @@ export function TradingPanel({ market }: TradingPanelProps) {
             setError("Connect wallet first");
             return;
         }
-        if (numAmount <= 0) {
-            setError("Enter a valid amount");
+        if (numAmount < 1) {
+            setError("Minimum position size is $1");
             return;
         }
 
@@ -305,7 +305,7 @@ export function TradingPanel({ market }: TradingPanelProps) {
                 {/* Trade button */}
                 <button
                     onClick={handleTrade}
-                    disabled={loading || numAmount <= 0}
+                    disabled={loading || numAmount < 1}
                     className={`w-full py-2.5 text-sm font-medium rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
                         outcome === "Yes"
                             ? "bg-success hover:bg-success/90 text-white"

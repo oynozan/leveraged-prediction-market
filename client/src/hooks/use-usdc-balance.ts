@@ -24,7 +24,7 @@ export function useUsdcBalance(address: string | undefined) {
         }
 
         fetchBalance();
-        const interval = setInterval(fetchBalance, 15_000);
+        const interval = setInterval(fetchBalance, 30_000);
         return () => {
             cancelled = true;
             clearInterval(interval);

@@ -1,12 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import Image from "next/image";
 import Link from "next/link";
+import { useState } from "react";
 import { usePathname } from "next/navigation";
-import { usePrivy } from "@privy-io/react-auth";
-import { cn } from "@/lib/utils";
-import { useUsdcBalance } from "@/hooks/use-usdc-balance";
 import { Menu, X, LogOut } from "lucide-react";
+
+import { cn } from "@/lib/utils";
+import { usePrivy } from "@privy-io/react-auth";
+import { useUsdcBalance } from "@/hooks/use-usdc-balance";
 
 const navLinks = [
     { label: "Trade", href: "/" },
@@ -46,6 +48,7 @@ export function Navbar() {
             <div className="flex items-center justify-between px-5 h-14">
                 <div className="flex items-center gap-7">
                     <Link href="/" className="flex items-center gap-2.5">
+                        <Image src="/logo.png" alt="Pred" width={24} height={24} />
                         <span className="text-sm font-bold tracking-[-0.01em] text-foreground">
                             Pred
                         </span>
