@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { usePrivy, useWallets } from "@privy-io/react-auth";
 import {
     createPublicClient,
@@ -21,7 +21,6 @@ import Link from "next/link";
 
 const USDC_DECIMALS = 6;
 const SHARE_DECIMALS = 18;
-const BPS = 10000;
 
 const ERC20_ABI = [
     { name: "balanceOf", type: "function", stateMutability: "view", inputs: [{ name: "account", type: "address" }], outputs: [{ name: "", type: "uint256" }] },
@@ -78,8 +77,14 @@ export default function LPPage() {
 
     const [tab, setTab] = useState<Tab>("pools");
     const [pools, setPools] = useState<PoolInfo[]>([]);
+    const [initialLoad, setInitialLoad] = useState(true);
+    const poolsLoadingRef = useRef(false);
+    const poolsHasMoreRef = useRef(true);
+    const poolsOffsetRef = useRef(0);
+    const poolsSentinelRef = useRef<HTMLDivElement>(null);
+    const [, forceRender] = useState(0);
+
     const [summary, setSummary] = useState<UserLPSummary | null>(null);
-    const [loading, setLoading] = useState(true);
 
     // Modal state
     const [modalMode, setModalMode] = useState<ModalMode>(null);
@@ -93,12 +98,34 @@ export default function LPPage() {
     const [userShares, setUserShares] = useState<string>("0");
     const [userValue, setUserValue] = useState<string>("0");
 
-    const loadPools = useCallback(async () => {
-        setLoading(true);
-        const data = await getLPPools();
-        setPools(data);
-        setLoading(false);
+    const PAGE_SIZE = 20;
+
+    const loadMorePools = useCallback(async () => {
+        if (poolsLoadingRef.current || !poolsHasMoreRef.current) return;
+        poolsLoadingRef.current = true;
+        forceRender((n) => n + 1);
+        try {
+            const data = await getLPPools(PAGE_SIZE, poolsOffsetRef.current);
+            setPools((prev) => [...prev, ...data.pools]);
+            poolsOffsetRef.current += data.pools.length;
+            poolsHasMoreRef.current = poolsOffsetRef.current < data.total;
+        } catch {
+            poolsHasMoreRef.current = false;
+        } finally {
+            poolsLoadingRef.current = false;
+            setInitialLoad(false);
+            forceRender((n) => n + 1);
+        }
     }, []);
+
+    const reloadPools = useCallback(() => {
+        poolsOffsetRef.current = 0;
+        poolsHasMoreRef.current = true;
+        setPools([]);
+        setInitialLoad(true);
+        poolsLoadingRef.current = false;
+        setTimeout(() => loadMorePools(), 0);
+    }, [loadMorePools]);
 
     const loadSummary = useCallback(async () => {
         if (!wallet?.address) { setSummary(null); return; }
@@ -110,8 +137,20 @@ export default function LPPage() {
         }
     }, [wallet?.address]);
 
-    useEffect(() => { loadPools(); }, [loadPools]);
+    useEffect(() => { loadMorePools(); }, [loadMorePools]);
     useEffect(() => { loadSummary(); }, [loadSummary]);
+
+    useEffect(() => {
+        if (initialLoad) return;
+        const el = poolsSentinelRef.current;
+        if (!el) return;
+        const observer = new IntersectionObserver(
+            (entries) => { if (entries[0].isIntersecting) loadMorePools(); },
+            { rootMargin: "200px" },
+        );
+        observer.observe(el);
+        return () => observer.disconnect();
+    }, [loadMorePools, initialLoad]);
 
     const hasPositions = summary && summary.positions.length > 0;
 
@@ -156,7 +195,7 @@ export default function LPPage() {
         if (txStep === "approving" || txStep === "executing") return;
         if (!wallet?.address || !modalPool || !LPPOOL_ADDRESS || !USDC_ADDRESS) return;
         const parsed = parseUnits(amount, USDC_DECIMALS);
-        if (parsed === 0n) return;
+        if (parsed === BigInt(0)) return;
 
         setTxError(null);
         console.log("[lp] handleDeposit start", { amount, conditionId: modalPool.conditionId });
@@ -206,7 +245,7 @@ export default function LPPage() {
 
             toast.success("Liquidity provided successfully!");
             closeModal();
-            loadPools();
+            reloadPools();
             loadSummary();
         } catch (err: any) {
             const msg = err.shortMessage || err.message || "Transaction failed";
@@ -228,11 +267,11 @@ export default function LPPage() {
             const usdcWant = parseUnits(amount, USDC_DECIMALS);
             const totalDep = BigInt(modalPool.totalDeposited);
             const totalShr = BigInt(modalPool.totalShares);
-            shareAmount = totalShr > 0n ? (usdcWant * totalShr) / totalDep : 0n;
+            shareAmount = totalShr > BigInt(0) ? (usdcWant * totalShr) / totalDep : BigInt(0);
             if (shareAmount > BigInt(userShares)) shareAmount = BigInt(userShares);
         }
 
-        if (shareAmount === 0n) return;
+        if (shareAmount === BigInt(0)) return;
         setTxError(null);
         console.log("[lp] handleWithdraw start", { shareAmount: shareAmount.toString(), conditionId: modalPool.conditionId });
 
@@ -257,7 +296,7 @@ export default function LPPage() {
 
             toast.success("Withdrawal successful!");
             closeModal();
-            loadPools();
+            reloadPools();
             loadSummary();
         } catch (err: any) {
             const msg = err.shortMessage || err.message || "Transaction failed";
@@ -312,16 +351,21 @@ export default function LPPage() {
 
             {/* Tab Content */}
             {tab === "pools" && (
-                <PoolsGrid
-                    pools={pools}
-                    loading={loading}
-                    authenticated={authenticated}
-                    ready={ready}
-                    login={login}
-                    userPositions={summary?.positions}
-                    onDeposit={(p) => openModal(p, "deposit")}
-                    onWithdraw={(p) => openModal(p, "withdraw")}
-                />
+                <>
+                    <PoolsTable
+                        pools={pools}
+                        loading={initialLoad}
+                        authenticated={authenticated}
+                        ready={ready}
+                        login={login}
+                        userPositions={summary?.positions}
+                        onDeposit={(p) => openModal(p, "deposit")}
+                        onWithdraw={(p) => openModal(p, "withdraw")}
+                    />
+                    <div ref={poolsSentinelRef} className="flex justify-center py-4">
+                        {poolsLoadingRef.current && !initialLoad && <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />}
+                    </div>
+                </>
             )}
 
             {tab === "positions" && hasPositions && summary && (
@@ -353,9 +397,9 @@ export default function LPPage() {
     );
 }
 
-// ---------- Pool Grid ----------
+// ---------- Pool Table ----------
 
-function PoolsGrid({
+function PoolsTable({
     pools,
     loading,
     authenticated,
@@ -393,108 +437,152 @@ function PoolsGrid({
     }
 
     return (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {pools.map((pool) => {
+        <div className="bg-card/50 rounded-xl border border-white/6 overflow-hidden">
+            {/* Desktop header */}
+            <div className="hidden md:grid grid-cols-[3fr_0.9fr_0.9fr_1.2fr_0.8fr_1fr_auto] gap-4 px-5 py-3 text-[11px] text-muted-foreground uppercase tracking-wider border-b border-white/6 sticky top-0 bg-card z-10">
+                <div>Market</div>
+                <div className="text-right">TVL</div>
+                <div className="text-right">APY</div>
+                <div>Utilization</div>
+                <div className="text-right">Expires</div>
+                <div className="text-right">Position</div>
+                <div className="w-[150px]" />
+            </div>
+
+            {pools.map((pool, i) => {
                 const userPos = userPositions?.find(p => p.conditionId === pool.conditionId);
-                const hasPosition = userPos && BigInt(userPos.currentValue) > 0n;
+                const hasPosition = userPos && BigInt(userPos.currentValue) > BigInt(0);
                 const util = Number(pool.utilizationBps) / 100;
 
                 return (
-                    <div
-                        key={pool.conditionId}
-                        className="flex flex-col bg-card rounded-xl border border-white/6 p-4 transition-all hover:border-white/15"
-                    >
-                        {/* Question */}
-                        <div className="mb-3">
-                            <h3 className="text-[13px] font-medium text-foreground leading-[1.4] line-clamp-2">
-                                {pool.question}
-                            </h3>
-                        </div>
-
-                        {/* Stats row */}
-                        <div className="grid grid-cols-2 gap-x-4 gap-y-2 mb-3">
-                            <div>
-                                <div className="text-[10px] text-muted-foreground uppercase tracking-wider">TVL</div>
-                                <div className="text-sm font-semibold text-foreground tabular-nums">
-                                    {fmtUsd(pool.totalDeposited)}
-                                </div>
-                            </div>
-                            <div>
-                                <div className="text-[10px] text-muted-foreground uppercase tracking-wider">APY</div>
-                                <div className="text-sm font-semibold text-primary tabular-nums">
-                                    {fmtBps(pool.interestRateBps)}
-                                </div>
-                            </div>
-                            <div>
-                                <div className="text-[10px] text-muted-foreground uppercase tracking-wider">Available</div>
-                                <div className="text-sm text-foreground tabular-nums">
-                                    {fmtUsd(pool.availableLiquidity)}
-                                </div>
-                            </div>
-                            <div>
-                                <div className="text-[10px] text-muted-foreground uppercase tracking-wider">Expires</div>
-                                <div className="text-sm text-muted-foreground tabular-nums">
-                                    {formatEndDate(pool.endDate)}
-                                </div>
-                            </div>
-                        </div>
-
-                        {/* Utilization bar */}
-                        <div className="mb-4">
-                            <div className="flex items-center justify-between text-[10px] text-muted-foreground mb-1">
-                                <span>Utilization</span>
-                                <span className="tabular-nums">{util.toFixed(1)}%</span>
-                            </div>
-                            <div className="h-1 rounded-full bg-white/6 overflow-hidden">
-                                <div
-                                    className={cn(
-                                        "h-full rounded-full transition-all",
-                                        util > 80 ? "bg-loss" : util > 60 ? "bg-yellow-500" : "bg-primary",
-                                    )}
-                                    style={{ width: `${Math.min(util, 100)}%` }}
-                                />
-                            </div>
-                        </div>
-
-                        {/* Actions */}
-                        <div className="mt-auto flex items-center gap-2">
-                            {ready && authenticated ? (
-                                <>
-                                    <button
-                                        onClick={() => onDeposit(pool)}
-                                        className="flex-1 h-8 text-xs font-medium rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
-                                    >
-                                        Provide Liquidity
-                                    </button>
-                                    {hasPosition && (
-                                        <button
-                                            onClick={() => onWithdraw(pool)}
-                                            className="h-8 px-3 text-xs font-medium rounded-lg border border-border text-foreground hover:bg-white/5 transition-colors"
-                                        >
-                                            Withdraw
-                                        </button>
-                                    )}
-                                </>
-                            ) : (
-                                <button
-                                    onClick={login}
-                                    disabled={!ready}
-                                    className="flex-1 h-8 text-xs font-medium rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
+                    <div key={pool.conditionId} className={cn(i % 2 === 0 ? "bg-white/3" : "bg-white/0")}>
+                        {/* Desktop row */}
+                        <div className="hidden md:grid grid-cols-[3fr_0.9fr_0.9fr_1.2fr_0.8fr_1fr_auto] gap-4 px-5 py-3.5 border-b border-white/4 last:border-b-0 hover:bg-white/2 transition-colors items-center">
+                            <div className="min-w-0">
+                                <Link
+                                    href={`/trade/${pool.slug}`}
+                                    className="text-[13px] font-medium text-foreground hover:text-primary transition-colors truncate block"
                                 >
-                                    Connect Wallet
-                                </button>
-                            )}
+                                    {pool.question}
+                                </Link>
+                            </div>
+                            <div className="text-right text-[13px] font-medium text-foreground tabular-nums">
+                                {fmtUsd(pool.totalDeposited)}
+                            </div>
+                            <div className="text-right text-[13px] font-semibold text-primary tabular-nums">
+                                {fmtBps(pool.interestRateBps)}
+                            </div>
+                            <div className="space-y-1">
+                                <div className="h-1.5 rounded-full bg-white/8 overflow-hidden">
+                                    <div
+                                        className={cn(
+                                            "h-full rounded-full transition-all",
+                                            util > 80 ? "bg-loss" : util > 60 ? "bg-yellow-500" : "bg-primary",
+                                        )}
+                                        style={{ width: `${Math.max(Math.min(util, 100), util > 0 ? 3 : 0)}%` }}
+                                    />
+                                </div>
+                                <div className="text-[11px] text-muted-foreground tabular-nums">
+                                    {util.toFixed(1)}% &middot; {fmtUsd(pool.availableLiquidity)} free
+                                </div>
+                            </div>
+                            <div className="text-right text-[13px] text-muted-foreground tabular-nums">
+                                {formatEndDate(pool.endDate)}
+                            </div>
+                            <div className="text-right text-[13px] tabular-nums">
+                                {hasPosition ? (
+                                    <span className="font-medium text-foreground">{fmtUsd(userPos!.currentValue)}</span>
+                                ) : (
+                                    <span className="text-muted-foreground/40">—</span>
+                                )}
+                            </div>
+                            <div className="flex items-center gap-1.5 w-[150px] justify-end">
+                                {ready && authenticated ? (
+                                    <>
+                                        {hasPosition && (
+                                            <button
+                                                onClick={() => onWithdraw(pool)}
+                                                className="h-7 px-3 text-[11px] font-medium rounded-md border border-white/10 text-foreground hover:bg-white/5 transition-colors"
+                                            >
+                                                Withdraw
+                                            </button>
+                                        )}
+                                        <button
+                                            onClick={() => onDeposit(pool)}
+                                            className="h-7 px-3.5 text-[11px] font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+                                        >
+                                            Deposit
+                                        </button>
+                                    </>
+                                ) : (
+                                    <button
+                                        onClick={login}
+                                        disabled={!ready}
+                                        className="h-7 px-3.5 text-[11px] font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
+                                    >
+                                        Connect
+                                    </button>
+                                )}
+                            </div>
                         </div>
 
-                        {/* User position badge */}
-                        {hasPosition && (
-                            <div className="mt-2 pt-2 border-t border-white/6 flex items-center justify-between">
-                                <span className="text-[10px] text-muted-foreground">Your position</span>
-                                <span className="text-xs font-medium text-foreground tabular-nums">
-                                    {fmtUsd(userPos!.currentValue)}
-                                </span>
+                        {/* Mobile card row */}
+                        <div className="md:hidden px-4 py-3.5 border-b border-white/4 last:border-b-0 space-y-3">
+                            <Link
+                                href={`/trade/${pool.slug}`}
+                                className="text-[13px] font-medium text-foreground hover:text-primary transition-colors line-clamp-2 block"
+                            >
+                                {pool.question}
+                            </Link>
+                            <div className="grid grid-cols-3 gap-3">
+                                <div>
+                                    <div className="text-[10px] text-muted-foreground uppercase mb-0.5">TVL</div>
+                                    <div className="text-sm font-medium text-foreground tabular-nums">{fmtUsd(pool.totalDeposited)}</div>
+                                </div>
+                                <div>
+                                    <div className="text-[10px] text-muted-foreground uppercase mb-0.5">APY</div>
+                                    <div className="text-sm font-semibold text-primary tabular-nums">{fmtBps(pool.interestRateBps)}</div>
+                                </div>
+                                <div>
+                                    <div className="text-[10px] text-muted-foreground uppercase mb-0.5">Expires</div>
+                                    <div className="text-sm text-muted-foreground tabular-nums">{formatEndDate(pool.endDate)}</div>
+                                </div>
                             </div>
-                        )}
+                            {hasPosition && (
+                                <div className="flex items-center justify-between bg-white/4 rounded-lg px-3 py-2">
+                                    <span className="text-[11px] text-muted-foreground">Your position</span>
+                                    <span className="text-sm font-medium text-foreground tabular-nums">{fmtUsd(userPos!.currentValue)}</span>
+                                </div>
+                            )}
+                            <div className="flex items-center gap-2">
+                                {ready && authenticated ? (
+                                    <>
+                                        <button
+                                            onClick={() => onDeposit(pool)}
+                                            className="flex-1 h-9 text-xs font-medium rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+                                        >
+                                            Deposit
+                                        </button>
+                                        {hasPosition && (
+                                            <button
+                                                onClick={() => onWithdraw(pool)}
+                                                className="h-9 px-4 text-xs font-medium rounded-lg border border-white/10 text-foreground hover:bg-white/5 transition-colors"
+                                            >
+                                                Withdraw
+                                            </button>
+                                        )}
+                                    </>
+                                ) : (
+                                    <button
+                                        onClick={login}
+                                        disabled={!ready}
+                                        className="flex-1 h-9 text-xs font-medium rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
+                                    >
+                                        Connect Wallet
+                                    </button>
+                                )}
+                            </div>
+                        </div>
                     </div>
                 );
             })}

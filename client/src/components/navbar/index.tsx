@@ -47,7 +47,7 @@ export function Navbar() {
             <div className="flex items-center justify-between px-5 h-14">
                 <div className="flex items-center gap-7">
                     <Link href="/" className="flex items-center gap-2.5">
-                        <Image src="/logo.png" alt="Pred" width={24} height={24} />
+                        <Image src="/logo-transparent.png" alt="Pred" width={24} height={24} />
                         <span className="text-sm font-bold tracking-[-0.01em] text-foreground">
                             Pred
                         </span>

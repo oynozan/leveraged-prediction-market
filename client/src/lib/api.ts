@@ -10,8 +10,9 @@ import type {
     BridgeRoute,
     BridgeTxData,
     BridgeStatus,
-    PoolInfo,
     UserLPSummary,
+    PaginatedMarkets,
+    PaginatedPools,
 } from "./types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL!;
@@ -54,25 +55,24 @@ async function fetchWithWallet(url: string, options?: any) {
     return fetch(url, { ...options, headers });
 }
 
-export async function getMarkets(): Promise<Market[]> {
+export async function getMarkets(limit = 20, offset = 0): Promise<PaginatedMarkets> {
     try {
-        const res = await fetch(`${API_URL}/markets`, {
-            next: { revalidate: 60 },
-        });
-
-        if (!res.ok) return [];
-
+        const res = await fetch(
+            `${API_URL}/markets?limit=${limit}&offset=${offset}`,
+            { cache: "no-store" },
+        );
+        if (!res.ok) return { markets: [], total: 0, limit, offset };
         return res.json();
     } catch (error) {
         console.error("Failed to fetch markets:", error);
-        return [];
+        return { markets: [], total: 0, limit, offset };
     }
 }
 
 export async function getMarketBySlug(slug: string): Promise<Market | null> {
     try {
-        const markets = await getMarkets();
-        return markets.find((m) => m.slug === slug) ?? null;
+        const data = await getMarkets(100, 0);
+        return data.markets.find((m) => m.slug === slug) ?? null;
     } catch {
         return null;
     }
@@ -225,13 +225,16 @@ export async function getBridgeStatus(params: {
 }
 
 // LP Pools
-export async function getLPPools(): Promise<PoolInfo[]> {
+export async function getLPPools(limit = 20, offset = 0): Promise<PaginatedPools> {
     try {
-        const res = await fetch(`${API_URL}/lp/pools`, { cache: "no-store" });
-        if (!res.ok) return [];
+        const res = await fetch(
+            `${API_URL}/lp/pools?limit=${limit}&offset=${offset}`,
+            { cache: "no-store" },
+        );
+        if (!res.ok) return { pools: [], total: 0, limit, offset };
         return res.json();
     } catch {
-        return [];
+        return { pools: [], total: 0, limit, offset };
     }
 }
 

@@ -130,6 +130,22 @@ export interface BridgeStatus {
     } | null;
 }
 
+// Pagination
+
+export interface PaginatedMarkets {
+    markets: Market[];
+    total: number;
+    limit: number;
+    offset: number;
+}
+
+export interface PaginatedPools {
+    pools: PoolInfo[];
+    total: number;
+    limit: number;
+    offset: number;
+}
+
 // LP Pool types
 
 export interface PoolInfo {

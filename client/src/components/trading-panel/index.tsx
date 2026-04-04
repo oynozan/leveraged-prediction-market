@@ -11,7 +11,8 @@ interface TradingPanelProps {
     market: Market;
 }
 
-const LEVERAGE_PRESETS = [1, 2, 3, 5, 10, 20];
+const MAX_LEVERAGE = 3;
+const LEVERAGE_PRESETS = [1, 2, 3];
 const AMOUNT_PRESETS = [25, 50, 75, 100];
 
 function LeverageModal({
@@ -26,11 +27,13 @@ function LeverageModal({
     const [value, setValue] = useState(leverage);
     const trackRef = useRef<HTMLDivElement>(null);
 
+    const range = MAX_LEVERAGE - 1;
+
     const handleTrackClick = (ev: React.MouseEvent<HTMLDivElement>) => {
         if (!trackRef.current) return;
         const rect = trackRef.current.getBoundingClientRect();
         const pct = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
-        setValue(Math.max(1, Math.min(20, Math.round(pct * 19 + 1))));
+        setValue(Math.max(1, Math.min(MAX_LEVERAGE, Math.round(pct * range + 1))));
     };
 
     const handleDrag = useCallback(() => {
@@ -39,7 +42,7 @@ function LeverageModal({
 
         const move = (ev: PointerEvent) => {
             const pct = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
-            setValue(Math.max(1, Math.min(20, Math.round(pct * 19 + 1))));
+            setValue(Math.max(1, Math.min(MAX_LEVERAGE, Math.round(pct * range + 1))));
         };
 
         const up = () => {
@@ -49,9 +52,9 @@ function LeverageModal({
 
         document.addEventListener("pointermove", move);
         document.addEventListener("pointerup", up);
-    }, []);
+    }, [range]);
 
-    const pct = ((value - 1) / 19) * 100;
+    const pct = ((value - 1) / range) * 100;
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
@@ -92,10 +95,8 @@ function LeverageModal({
 
                     <div className="flex justify-between text-[10px] text-muted-foreground">
                         <span>1x</span>
-                        <span>5x</span>
-                        <span>10x</span>
-                        <span>15x</span>
-                        <span>20x</span>
+                        <span>2x</span>
+                        <span>3x</span>
                     </div>
                 </div>
 
@@ -129,7 +130,7 @@ function LeverageModal({
 export function TradingPanel({ market }: TradingPanelProps) {
     const [outcome, setOutcome] = useState<"Yes" | "No">("Yes");
     const [amount, setAmount] = useState("");
-    const [leverage, setLeverage] = useState(5);
+    const [leverage, setLeverage] = useState(2);
     const [leverageModalOpen, setLeverageModalOpen] = useState(false);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
