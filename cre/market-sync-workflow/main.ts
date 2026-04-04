@@ -58,17 +58,27 @@ type PostResult = {
     statusCode: number;
 };
 
-/* Fetch current pagination offset from backend */
-const fetchCursor = (sendRequester: HTTPSendRequester, config: Config): string => {
-    const resp = sendRequester
-        .sendRequest({ url: config.backendCursorUrl, method: "GET" as const })
+const fetchCursorFromBackend = (
+    nodeRuntime: NodeRuntime<Config>,
+    accessToken: string,
+): CursorResponse => {
+    const httpClient = new HTTPClient();
+
+    const resp = httpClient
+        .sendRequest(nodeRuntime, {
+            url: nodeRuntime.config.backendCursorUrl,
+            method: "GET" as const,
+            headers: {
+                Authorization: `Bearer ${accessToken}`,
+            },
+        })
         .result();
 
     if (!ok(resp)) {
         throw new Error(`Backend cursor returned ${resp.statusCode}`);
     }
 
-    return new TextDecoder().decode(resp.body);
+    return JSON.parse(new TextDecoder().decode(resp.body)) as CursorResponse;
 };
 
 /* Fetch one page of markets from Gamma API */
@@ -167,16 +177,13 @@ const onCronTrigger = (runtime: Runtime<Config>): string => {
 
     const httpClient = new HTTPClient();
 
-    // 1. Read cursor from backend
-    const cursorJson = httpClient
-        .sendRequest(
-            runtime,
-            (sr: HTTPSendRequester, cfg: Config) => fetchCursor(sr, cfg),
-            consensusIdenticalAggregation<string>(),
-        )(runtime.config)
+    // 1. Read cursor from backend (authenticated)
+    const cursor = runtime
+        .runInNodeMode(fetchCursorFromBackend, consensusIdenticalAggregation<CursorResponse>())(
+            accessToken,
+        )
         .result();
 
-    const cursor = JSON.parse(cursorJson) as CursorResponse;
     const offset = cursor.offset ?? 0;
     runtime.log(`Starting sync at offset=${offset}, limit=${runtime.config.marketLimit}`);
 
