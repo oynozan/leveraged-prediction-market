@@ -9,8 +9,10 @@ interface IVault {
 
     function lockMargin(address user, uint256 amount) external;
     function releaseMargin(address user, uint256 amount) external;
-    function borrowFromPool(uint256 amount) external;
-    function repayToPool(uint256 amount) external;
+    function borrowFromPool(bytes32 conditionId, uint256 amount) external;
+    function repayToPool(bytes32 conditionId, uint256 amount) external;
+    function fundPolymarketWallet(uint256 amount) external;
+    function setPolymarketWallet(address _wallet) external;
 
     function creditBalance(address user, uint256 amount, uint64 sourceChain, bytes32 ccipMessageId) external;
 

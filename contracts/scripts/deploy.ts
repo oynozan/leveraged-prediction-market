@@ -54,6 +54,7 @@ async function main() {
     const REBALANCER_ADDRESS = process.env.REBALANCER_ADDRESS || deployer.address;
     const CB_WORKFLOW_ADDRESS = process.env.CB_WORKFLOW_ADDRESS || deployer.address;
     const BRIDGE_MONITOR_ADDRESS = process.env.BRIDGE_MONITOR_ADDRESS || deployer.address;
+    const POLYMARKET_WALLET_ADDRESS = process.env.POLYMARKET_WALLET_ADDRESS;
 
     // 1. CircuitBreaker
     const CircuitBreaker = await ethers.getContractFactory("CircuitBreaker");
@@ -98,11 +99,15 @@ async function main() {
     const CB_ROLE = ethers.keccak256(ethers.toUtf8Bytes("CIRCUIT_BREAKER_ROLE"));
     const BRIDGE_ROLE = ethers.keccak256(ethers.toUtf8Bytes("BRIDGE_ROLE"));
     const VAULT_ROLE = ethers.keccak256(ethers.toUtf8Bytes("VAULT_ROLE"));
+    const FEE_DISTRIBUTOR_ROLE = ethers.keccak256(ethers.toUtf8Bytes("FEE_DISTRIBUTOR_ROLE"));
 
     console.log("Granting roles (waiting for each tx to be mined)...");
 
     await (await pool.grantRole(BORROWER_ROLE, await vault.getAddress())).wait();
     console.log("  BORROWER_ROLE on LPPool -> Vault");
+
+    await (await pool.grantRole(FEE_DISTRIBUTOR_ROLE, await feeDist.getAddress())).wait();
+    console.log("  FEE_DISTRIBUTOR_ROLE on LPPool -> FeeDistributor");
 
     await (await vault.grantRole(OPERATOR_ROLE, OPERATOR_ADDRESS)).wait();
     console.log("  OPERATOR_ROLE on Vault -> operator");
@@ -121,6 +126,11 @@ async function main() {
 
     await (await feeDist.grantRole(VAULT_ROLE, await vault.getAddress())).wait();
     console.log("  VAULT_ROLE on FeeDistributor -> Vault");
+
+    if (POLYMARKET_WALLET_ADDRESS) {
+        await (await vault.setPolymarketWallet(POLYMARKET_WALLET_ADDRESS)).wait();
+        console.log(`  Polymarket wallet set to ${POLYMARKET_WALLET_ADDRESS}`);
+    }
 
     console.log("All roles granted.");
 

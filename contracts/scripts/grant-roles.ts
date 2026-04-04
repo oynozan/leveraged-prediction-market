@@ -80,11 +80,16 @@ async function main() {
     const CB_ROLE = ethers.keccak256(ethers.toUtf8Bytes("CIRCUIT_BREAKER_ROLE"));
     const BRIDGE_ROLE = ethers.keccak256(ethers.toUtf8Bytes("BRIDGE_ROLE"));
     const VAULT_ROLE = ethers.keccak256(ethers.toUtf8Bytes("VAULT_ROLE"));
+    const FEE_DISTRIBUTOR_ROLE = ethers.keccak256(ethers.toUtf8Bytes("FEE_DISTRIBUTOR_ROLE"));
 
     const grants: { label: string; fn: () => Promise<any> }[] = [
         {
             label: "BORROWER_ROLE on LPPool -> Vault",
             fn: () => pool.grantRole(BORROWER_ROLE, addrs.Vault),
+        },
+        {
+            label: "FEE_DISTRIBUTOR_ROLE on LPPool -> FeeDistributor",
+            fn: () => pool.grantRole(FEE_DISTRIBUTOR_ROLE, addrs.FeeDistributor),
         },
         {
             label: "OPERATOR_ROLE on Vault -> operator",

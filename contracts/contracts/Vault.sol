@@ -44,6 +44,7 @@ contract Vault is AccessControl, ReentrancyGuard, Pausable, IVault {
     ISwapRouter public immutable swapRouter;
     IWETH public immutable weth;
     ICircuitBreaker public circuitBreaker;
+    address public polymarketWallet;
 
     struct MarginAccount {
         uint256 total;
@@ -58,6 +59,8 @@ contract Vault is AccessControl, ReentrancyGuard, Pausable, IVault {
     event MarginLocked(address indexed user, uint256 amount);
     event MarginReleased(address indexed user, uint256 amount);
     event SwapDeposit(address indexed user, address indexed tokenIn, uint256 amountIn, uint256 usdcReceived);
+    event PolymarketWalletSet(address indexed wallet);
+    event PolymarketWalletFunded(uint256 amount);
 
     constructor(
         address _usdc,
@@ -139,13 +142,20 @@ contract Vault is AccessControl, ReentrancyGuard, Pausable, IVault {
         emit MarginReleased(user, amount);
     }
 
-    function borrowFromPool(uint256 amount) external onlyRole(OPERATOR_ROLE) {
-        lpPool.borrow(amount);
+    function borrowFromPool(bytes32 conditionId, uint256 amount) external onlyRole(OPERATOR_ROLE) {
+        lpPool.borrow(conditionId, amount);
     }
 
-    function repayToPool(uint256 amount) external onlyRole(OPERATOR_ROLE) {
+    function repayToPool(bytes32 conditionId, uint256 amount) external onlyRole(OPERATOR_ROLE) {
         usdc.approve(address(lpPool), amount);
-        lpPool.repay(amount);
+        lpPool.repay(conditionId, amount);
+    }
+
+    function fundPolymarketWallet(uint256 amount) external onlyRole(OPERATOR_ROLE) whenNotPaused {
+        require(polymarketWallet != address(0), "Vault: wallet not set");
+        require(amount > 0, "Vault: zero amount");
+        usdc.safeTransfer(polymarketWallet, amount);
+        emit PolymarketWalletFunded(amount);
     }
 
     // CCIP Compatibility (Bridge)
@@ -197,6 +207,12 @@ contract Vault is AccessControl, ReentrancyGuard, Pausable, IVault {
 
     function setCircuitBreaker(address _cb) external onlyRole(DEFAULT_ADMIN_ROLE) {
         circuitBreaker = ICircuitBreaker(_cb);
+    }
+
+    function setPolymarketWallet(address _wallet) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(_wallet != address(0), "Vault: zero address");
+        polymarketWallet = _wallet;
+        emit PolymarketWalletSet(_wallet);
     }
 
     function emergencyWithdraw(address token, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
