@@ -43,8 +43,10 @@ async function getPrivyIdentityToken(): Promise<string> {
     return _pendingPromise;
 }
 
+const DEFAULT_TIMEOUT_MS = 90_000;
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function fetchWithWallet(url: string, options?: any) {
+async function fetchWithWallet(url: string, options?: any, timeoutMs = DEFAULT_TIMEOUT_MS) {
     const token = await getPrivyIdentityToken();
 
     const headers = {
@@ -52,7 +54,19 @@ async function fetchWithWallet(url: string, options?: any) {
         "privy-id-token": token || "",
     };
 
-    return fetch(url, { ...options, headers });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+        return await fetch(url, { ...options, headers, signal: controller.signal });
+    } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") {
+            throw new Error("Request timed out — check your positions");
+        }
+        throw err;
+    } finally {
+        clearTimeout(timer);
+    }
 }
 
 export async function getMarkets(limit = 20, offset = 0): Promise<PaginatedMarkets> {

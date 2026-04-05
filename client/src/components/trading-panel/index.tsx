@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useMarketData } from "@/contexts/market-data";
 import { placeTrade } from "@/lib/api";
 import { useUsdcBalance } from "@/hooks/use-usdc-balance";
+import { useTradeProgress } from "@/hooks/use-trade-progress";
 import { usePrivy } from "@privy-io/react-auth";
 import type { Market } from "@/lib/types";
 
@@ -142,6 +143,7 @@ export function TradingPanel({ market }: TradingPanelProps) {
 
     const walletAddress = user?.wallet?.address;
     const usdcBalance = useUsdcBalance(walletAddress);
+    const tradeProgress = useTradeProgress(loading);
 
     const liveYes = book?.last_trade_price ? parseFloat(book.last_trade_price) : null;
     const currentYesPrice = liveYes !== null ? liveYes : market.tokens.Yes.price;
@@ -333,7 +335,9 @@ export function TradingPanel({ market }: TradingPanelProps) {
                                     d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
                                 />
                             </svg>
-                            Executing...
+                            {tradeProgress
+                                ? `${tradeProgress.label} (${tradeProgress.step}/${tradeProgress.total})`
+                                : "Executing..."}
                         </span>
                     ) : oddsOutOfRange ? (
                         "Trading Disabled (odds outside 10–90%)"

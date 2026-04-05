@@ -83,16 +83,7 @@ export function Footer() {
             <StatusIndicator />
 
             <div className="flex items-center gap-3.5">
-                <button className="text-muted-foreground hover:text-foreground transition-colors">
-                    <XIcon className="w-3.5 h-3.5" />
-                </button>
-                <button className="text-muted-foreground hover:text-foreground transition-colors">
-                    <DiscordIcon className="w-3.5 h-3.5" />
-                </button>
-                <button className="text-muted-foreground hover:text-foreground transition-colors">
-                    <Copy className="w-3.5 h-3.5" />
-                </button>
-                <span className="text-muted-foreground">v1.0.0</span>
+                <span className="text-muted-foreground">v0.1.0</span>
             </div>
         </footer>
     );

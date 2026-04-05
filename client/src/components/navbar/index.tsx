@@ -78,6 +78,12 @@ export function Navbar() {
                     >
                         Deposit
                     </Link>
+                    <Link
+                        href="/withdraw"
+                        className="px-3.5 py-1.5 text-sm rounded border border-border text-muted-foreground hover:text-foreground hover:border-foreground/20 transition-colors"
+                    >
+                        Withdraw
+                    </Link>
 
                     {ready && authenticated && walletAddress && usdcBalance !== null && (
                         <div className="hidden sm:flex items-center bg-card px-3 py-1.5 rounded text-sm text-foreground">

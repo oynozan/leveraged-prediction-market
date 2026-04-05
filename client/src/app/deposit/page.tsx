@@ -151,12 +151,12 @@ export default function DepositPage() {
     }, []);
 
     const parsedAmount = (() => {
-        if (!amount || !selectedToken) return 0n;
-        try { return parseUnits(amount, selectedToken.decimals); } catch { return 0n; }
+        if (!amount || !selectedToken) return BigInt(0);
+        try { return parseUnits(amount, selectedToken.decimals); } catch { return BigInt(0); }
     })();
 
     const fetchBridgeQuote = useCallback(async () => {
-        if (isPolygon || !wallet?.address || !selectedToken || parsedAmount === 0n) return;
+        if (isPolygon || !wallet?.address || !selectedToken || parsedAmount === BigInt(0)) return;
 
         log("Fetching bridge quote:", {
             fromChainId: selectedChainId,
@@ -203,7 +203,7 @@ export default function DepositPage() {
     }, [isPolygon, wallet?.address, selectedToken, parsedAmount, selectedChainId]);
 
     useEffect(() => {
-        if (!isPolygon && parsedAmount > 0n) {
+        if (!isPolygon && parsedAmount > BigInt(0)) {
             const t = setTimeout(fetchBridgeQuote, 800);
             return () => clearTimeout(t);
         }
@@ -351,7 +351,7 @@ export default function DepositPage() {
     }
 
     async function handlePolygonDeposit() {
-        if (!wallet?.address || !config || !selectedToken || parsedAmount === 0n) return;
+        if (!wallet?.address || !config || !selectedToken || parsedAmount === BigInt(0)) return;
 
         log("=== POLYGON DEPOSIT START ===");
         log("Token:", selectedToken.symbol, selectedToken.address);
@@ -423,7 +423,7 @@ export default function DepositPage() {
                     args: [
                         selectedToken.address as Address,
                         parsedAmount,
-                        0n,
+                        BigInt(0),
                         3000,
                     ],
                 });
@@ -619,81 +619,81 @@ export default function DepositPage() {
 
                 <div className="space-y-2">
                     <label className="text-xs text-muted-foreground">Network</label>
-                    <div className="grid grid-cols-4 gap-2">
-                        {config?.chains.map(chain => (
-                            <button
-                                key={chain.id}
-                                onClick={() => setSelectedChainId(chain.id)}
-                                disabled={isBusy}
-                                className={cn(
-                                    "py-2 text-xs font-medium rounded-lg border transition-colors",
-                                    selectedChainId === chain.id
-                                        ? "border-primary text-primary bg-primary/10"
-                                        : "border-border text-muted-foreground hover:text-foreground hover:border-foreground/20",
-                                    isBusy && "opacity-50 cursor-not-allowed",
-                                )}
-                            >
-                                {CHAIN_LABELS[chain.id] || chain.name}
-                            </button>
-                        ))}
+                        <div className="grid grid-cols-4 gap-2">
+                            {config?.chains.map(chain => (
+                                <button
+                                    key={chain.id}
+                                    onClick={() => setSelectedChainId(chain.id)}
+                                    disabled={isBusy}
+                                    className={cn(
+                                        "py-2 text-xs font-medium rounded-lg border transition-colors",
+                                        selectedChainId === chain.id
+                                            ? "border-primary text-primary bg-primary/10"
+                                            : "border-border text-muted-foreground hover:text-foreground hover:border-foreground/20",
+                                        isBusy && "opacity-50 cursor-not-allowed",
+                                    )}
+                                >
+                                    {CHAIN_LABELS[chain.id] || chain.name}
+                                </button>
+                            ))}
+                        </div>
                     </div>
-                </div>
 
-                <div className="space-y-2">
-                    <label className="text-xs text-muted-foreground">Token</label>
-                    <div className="grid grid-cols-2 gap-2">
-                        {(["USDC", "USDT"] as const).map(sym => (
-                            <button
-                                key={sym}
-                                onClick={() => setSelectedSymbol(sym)}
-                                disabled={isBusy}
-                                className={cn(
-                                    "py-2 text-sm font-medium rounded-lg border transition-colors",
-                                    selectedSymbol === sym
-                                        ? "border-primary text-primary bg-primary/10"
-                                        : "border-border text-muted-foreground hover:text-foreground hover:border-foreground/20",
-                                    isBusy && "opacity-50 cursor-not-allowed",
-                                )}
-                            >
-                                {sym}
-                            </button>
-                        ))}
+                    <div className="space-y-2">
+                        <label className="text-xs text-muted-foreground">Token</label>
+                        <div className="grid grid-cols-2 gap-2">
+                            {(["USDC", "USDT"] as const).map(sym => (
+                                <button
+                                    key={sym}
+                                    onClick={() => setSelectedSymbol(sym)}
+                                    disabled={isBusy}
+                                    className={cn(
+                                        "py-2 text-sm font-medium rounded-lg border transition-colors",
+                                        selectedSymbol === sym
+                                            ? "border-primary text-primary bg-primary/10"
+                                            : "border-border text-muted-foreground hover:text-foreground hover:border-foreground/20",
+                                        isBusy && "opacity-50 cursor-not-allowed",
+                                    )}
+                                >
+                                    {sym}
+                                </button>
+                            ))}
+                        </div>
                     </div>
-                </div>
 
-                <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                        <label className="text-xs text-muted-foreground">Amount</label>
-                        {balance !== null && (
-                            <button
-                                onClick={() => setAmount(balance)}
-                                className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
-                            >
-                                Balance: {Number(balance).toLocaleString("en-US", { maximumFractionDigits: 2 })} {selectedSymbol}
-                            </button>
-                        )}
-                    </div>
-                    <div className="relative">
-                        <input
-                            type="text"
-                            inputMode="decimal"
-                            placeholder="0.00"
-                            value={amount}
-                            disabled={isBusy}
-                            onChange={e => {
-                                const v = e.target.value.replace(/[^0-9.]/g, "");
-                                if (v.split(".").length <= 2) setAmount(v);
-                            }}
-                            className={cn(
-                                "w-full bg-card border border-border rounded-lg px-4 py-3 text-foreground text-lg outline-none focus:border-primary/50 transition-colors pr-16",
-                                isBusy && "opacity-50",
+                    <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                            <label className="text-xs text-muted-foreground">Amount</label>
+                            {balance !== null && (
+                                <button
+                                    onClick={() => setAmount(balance)}
+                                    className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                                >
+                                    Balance: {Number(balance).toLocaleString("en-US", { maximumFractionDigits: 2 })} {selectedSymbol}
+                                </button>
                             )}
-                        />
-                        <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-                            {selectedSymbol}
-                        </span>
-                    </div>
-                    {parsedAmount > 0n && parsedAmount < MIN_DEPOSIT && (
+                        </div>
+                        <div className="relative">
+                            <input
+                                type="text"
+                                inputMode="decimal"
+                                placeholder="0.00"
+                                value={amount}
+                                disabled={isBusy}
+                                onChange={e => {
+                                    const v = e.target.value.replace(/[^0-9.]/g, "");
+                                    if (v.split(".").length <= 2) setAmount(v);
+                                }}
+                                className={cn(
+                                    "w-full bg-card border border-border rounded-lg px-4 py-3 text-foreground text-lg outline-none focus:border-primary/50 transition-colors pr-16",
+                                    isBusy && "opacity-50",
+                                )}
+                            />
+                            <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
+                                {selectedSymbol}
+                            </span>
+                        </div>
+                    {parsedAmount > BigInt(0) && parsedAmount < MIN_DEPOSIT && (
                         <p className="text-xs text-destructive mt-1">Minimum deposit is $1</p>
                     )}
                 </div>
@@ -725,7 +725,7 @@ export default function DepositPage() {
                     </div>
                 )}
 
-                {isPolygon && selectedSymbol === "USDT" && parsedAmount > 0n && (
+                {isPolygon && selectedSymbol === "USDT" && parsedAmount > BigInt(0) && (
                     <div className="bg-card rounded-lg border border-border p-3 text-xs text-muted-foreground">
                         USDT will be swapped to USDC via Uniswap before depositing into the Vault.
                     </div>
