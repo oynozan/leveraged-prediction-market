@@ -23,13 +23,21 @@ import {
     zeroAddress,
 } from "viem";
 import { z } from "zod";
-import { vaultAbi, RecoveryReportParams } from "../contracts/abi";
+import {
+    vaultAbi,
+    RecoveryReportWrapperParams,
+    MarginRecoveryInnerParams,
+    LPRepayInnerParams,
+    ACTION_RELEASE_MARGIN,
+    ACTION_REPAY_LP,
+} from "../contracts/abi";
 
 const configSchema = z.object({
     chainSelectorName: z.string(),
     vaultAddress: z.string(),
     recoveryReceiverAddress: z.string(),
     backendPositionsUrl: z.string(),
+    backendStaleBorrowsUrl: z.string(),
     gasLimit: z.string(),
 });
 
@@ -50,6 +58,17 @@ type RecoveryAction = {
     onChainLocked: bigint;
     expectedLocked: bigint;
     excess: bigint;
+};
+
+type StaleBorrow = {
+    conditionId: string;
+    totalBorrowed: number;
+    positionIds: string[];
+};
+
+type StaleBorrowsResponse = {
+    borrows: StaleBorrow[];
+    totalPositions: number;
 };
 
 const USDC_DECIMALS = 6;
@@ -76,6 +95,29 @@ function fetchPositions(
     }
 
     return JSON.parse(new TextDecoder().decode(resp.body)) as PositionsResponse;
+}
+
+function fetchStaleBorrows(
+    nodeRuntime: NodeRuntime<Config>,
+    accessToken: string,
+): StaleBorrowsResponse {
+    const httpClient = new HTTPClient();
+
+    const resp = httpClient
+        .sendRequest(nodeRuntime, {
+            url: nodeRuntime.config.backendStaleBorrowsUrl,
+            method: "GET" as const,
+            headers: {
+                Authorization: `Bearer ${accessToken}`,
+            },
+        })
+        .result();
+
+    if (!ok(resp)) {
+        throw new Error(`Backend stale-borrows returned ${resp.statusCode}`);
+    }
+
+    return JSON.parse(new TextDecoder().decode(resp.body)) as StaleBorrowsResponse;
 }
 
 function readOnChainMargin(
@@ -109,25 +151,49 @@ function readOnChainMargin(
     return { total, locked, available };
 }
 
+function encodeRecoveryReport(action: number, innerData: `0x${string}`): `0x${string}` {
+    return encodeAbiParameters(RecoveryReportWrapperParams, [action, innerData]);
+}
+
+function submitReport(
+    runtime: Runtime<Config>,
+    evmClient: EVMClient,
+    reportData: `0x${string}`,
+    label: string,
+): boolean {
+    const reportResponse = runtime
+        .report({
+            encodedPayload: hexToBase64(reportData),
+            encoderName: "evm",
+            signingAlgo: "ecdsa",
+            hashingAlgo: "keccak256",
+        })
+        .result();
+
+    const writeResult = evmClient
+        .writeReport(runtime, {
+            receiver: runtime.config.recoveryReceiverAddress,
+            report: reportResponse,
+            gasConfig: { gasLimit: runtime.config.gasLimit },
+        })
+        .result();
+
+    if (writeResult.txStatus === TxStatus.SUCCESS) {
+        const txHash = bytesToHex(writeResult.txHash || new Uint8Array(32));
+        runtime.log(`${label} tx: ${txHash}`);
+        return true;
+    }
+
+    runtime.log(`${label} tx FAILED: status=${writeResult.txStatus}`);
+    return false;
+}
+
 const onHttpTrigger = (runtime: Runtime<Config>, payload: HTTPPayload): string => {
     const config = runtime.config;
 
     runtime.log("Recovery workflow triggered");
 
     const accessToken = runtime.getSecret({ id: "BACKEND_ACCESS_TOKEN" }).result().value;
-
-    const positions = runtime
-        .runInNodeMode(fetchPositions, consensusIdenticalAggregation<PositionsResponse>())(
-            accessToken,
-        )
-        .result();
-
-    runtime.log(`Fetched ${positions.totalPositions} open positions across ${positions.wallets.length} wallet(s)`);
-
-    if (positions.wallets.length === 0) {
-        runtime.log("No open positions — nothing to recover.");
-        return "Nothing to recover";
-    }
 
     const network = getNetwork({
         chainFamily: "evm",
@@ -137,75 +203,109 @@ const onHttpTrigger = (runtime: Runtime<Config>, payload: HTTPPayload): string =
 
     const evmClient = new EVMClient(network.chainSelector.selector);
 
-    const actions: RecoveryAction[] = [];
+    let totalMarginRecovered = 0n;
+    let walletsRecovered = 0;
+    let totalLPRepaid = 0n;
+    let lpRepaidCount = 0;
 
-    for (const ws of positions.wallets) {
-        const wallet = ws.wallet as `0x${string}`;
-        const margin = readOnChainMargin(evmClient, runtime, wallet);
-        const expectedLocked = BigInt(Math.round(ws.totalLockedMargin * USDC_SCALE));
+    /* ── Phase 1: Margin recovery (excess locked margin) ── */
 
-        runtime.log(
-            `Wallet ${ws.wallet}: on-chain locked=${margin.locked}, expected=${expectedLocked}`,
-        );
+    const positions = runtime
+        .runInNodeMode(fetchPositions, consensusIdenticalAggregation<PositionsResponse>())(
+            accessToken,
+        )
+        .result();
 
-        if (margin.locked > expectedLocked) {
-            const excess = margin.locked - expectedLocked;
-            actions.push({
-                wallet: ws.wallet,
-                onChainLocked: margin.locked,
-                expectedLocked,
-                excess,
-            });
+    runtime.log(`Fetched ${positions.totalPositions} open positions across ${positions.wallets.length} wallet(s)`);
+
+    if (positions.wallets.length > 0) {
+        const actions: RecoveryAction[] = [];
+
+        for (const ws of positions.wallets) {
+            const wallet = ws.wallet as `0x${string}`;
+            const margin = readOnChainMargin(evmClient, runtime, wallet);
+            const expectedLocked = BigInt(Math.round(ws.totalLockedMargin * USDC_SCALE));
+
+            runtime.log(
+                `Wallet ${ws.wallet}: on-chain locked=${margin.locked}, expected=${expectedLocked}`,
+            );
+
+            if (margin.locked > expectedLocked) {
+                const excess = margin.locked - expectedLocked;
+                actions.push({
+                    wallet: ws.wallet,
+                    onChainLocked: margin.locked,
+                    expectedLocked,
+                    excess,
+                });
+            }
+        }
+
+        for (const action of actions) {
+            runtime.log(
+                `Recovering margin: ${action.excess} (${Number(action.excess) / USDC_SCALE} USDC) for ${action.wallet}`,
+            );
+
+            const innerData = encodeAbiParameters(MarginRecoveryInnerParams, [
+                action.wallet as `0x${string}`,
+                action.excess,
+            ]);
+            const reportData = encodeRecoveryReport(ACTION_RELEASE_MARGIN, innerData);
+
+            if (submitReport(runtime, evmClient, reportData, `Margin recovery for ${action.wallet}`)) {
+                totalMarginRecovered += action.excess;
+                walletsRecovered++;
+            }
         }
     }
 
-    if (actions.length === 0) {
-        runtime.log("All wallets match — nothing to recover.");
+    /* ── Phase 2: LP repayment (stale borrows from closed positions) ── */
+
+    const staleBorrows = runtime
+        .runInNodeMode(fetchStaleBorrows, consensusIdenticalAggregation<StaleBorrowsResponse>())(
+            accessToken,
+        )
+        .result();
+
+    runtime.log(`Fetched ${staleBorrows.totalPositions} stale borrow position(s) across ${staleBorrows.borrows.length} condition(s)`);
+
+    for (const borrow of staleBorrows.borrows) {
+        const amountMicro = BigInt(Math.round(borrow.totalBorrowed * USDC_SCALE));
+        if (amountMicro <= 0n) continue;
+
+        runtime.log(
+            `Repaying LP: ${amountMicro} (${Number(amountMicro) / USDC_SCALE} USDC) for conditionId=${borrow.conditionId}`,
+        );
+
+        const innerData = encodeAbiParameters(LPRepayInnerParams, [
+            borrow.conditionId as `0x${string}`,
+            amountMicro,
+        ]);
+        const reportData = encodeRecoveryReport(ACTION_REPAY_LP, innerData);
+
+        if (submitReport(runtime, evmClient, reportData, `LP repay for ${borrow.conditionId}`)) {
+            totalLPRepaid += amountMicro;
+            lpRepaidCount++;
+        }
+    }
+
+    /* ── Summary ── */
+
+    const parts: string[] = [];
+
+    if (walletsRecovered > 0) {
+        parts.push(`Margin: $${(Number(totalMarginRecovered) / USDC_SCALE).toFixed(2)} recovered for ${walletsRecovered} wallet(s)`);
+    }
+    if (lpRepaidCount > 0) {
+        parts.push(`LP: $${(Number(totalLPRepaid) / USDC_SCALE).toFixed(2)} repaid for ${lpRepaidCount} condition(s)`);
+    }
+
+    if (parts.length === 0) {
+        runtime.log("Nothing to recover.");
         return "Nothing to recover";
     }
 
-    let totalRecovered = 0n;
-    let walletsRecovered = 0;
-
-    for (const action of actions) {
-        runtime.log(
-            `Recovering ${action.excess} (${Number(action.excess) / USDC_SCALE} USDC) for ${action.wallet}`,
-        );
-
-        const reportData = encodeAbiParameters(RecoveryReportParams, [
-            action.wallet as `0x${string}`,
-            action.excess,
-        ]);
-
-        const reportResponse = runtime
-            .report({
-                encodedPayload: hexToBase64(reportData),
-                encoderName: "evm",
-                signingAlgo: "ecdsa",
-                hashingAlgo: "keccak256",
-            })
-            .result();
-
-        const writeResult = evmClient
-            .writeReport(runtime, {
-                receiver: config.recoveryReceiverAddress,
-                report: reportResponse,
-                gasConfig: { gasLimit: config.gasLimit },
-            })
-            .result();
-
-        if (writeResult.txStatus === TxStatus.SUCCESS) {
-            const txHash = bytesToHex(writeResult.txHash || new Uint8Array(32));
-            runtime.log(`Recovery tx for ${action.wallet}: ${txHash}`);
-            totalRecovered += action.excess;
-            walletsRecovered++;
-        } else {
-            runtime.log(`Recovery tx FAILED for ${action.wallet}: status=${writeResult.txStatus}`);
-        }
-    }
-
-    const usdRecovered = (Number(totalRecovered) / USDC_SCALE).toFixed(2);
-    const summary = `Recovered $${usdRecovered} for ${walletsRecovered} wallet(s)`;
+    const summary = parts.join(" | ");
     runtime.log(summary);
     return summary;
 };
