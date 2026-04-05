@@ -12,6 +12,7 @@
         "grant-roles:sepolia": "hardhat run scripts/grant-roles.ts --network sepolia",
         "grant-roles:amoy": "hardhat run scripts/grant-roles.ts --network amoy",
         "grant-roles:polygon": "hardhat run scripts/grant-roles.ts --network polygon",
+        "deploy-recovery-receiver:polygon": "hardhat run scripts/deploy-recovery-receiver.ts --network polygon",
         "copy-abis": "node scripts/copy-abis.cjs"
     },
     "devDependencies": {
