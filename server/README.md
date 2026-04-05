@@ -1,37 +1,74 @@
-There are 2 types of JWT tokens:
+# Server
 
-1) User authentication
-2) Webhook / server-to-server authentication
+This folder contains the Express backend for Pred Leverage. It serves public market data, verifies authenticated user actions, stores application state in MongoDB, integrates with Polymarket, exposes live updates over Socket.IO, and can submit on-chain transactions when contract configuration is present.
 
-For server-to-server authentication, a keyfile is needed. For user authentication, a random string is enough.
+## What Lives Here
 
-## How to create a keyfile for server-only auth?
-Run these commands in order:
+- `server.ts`: application bootstrap, MongoDB connection, middleware, routes, sockets, and optional contract initialization.
+- `routes/public/`: public API endpoints for markets, trade, positions, deposit, LP data, health, and ping.
+- `routes/protected/`: server-to-server endpoints used by automation and privileged workflows.
+- `services/`: business logic for trading, vault operations, LP state, swaps, recovery, netting, bridge helpers, and Polymarket access.
+- `lib/contracts.ts`: loads ABIs from `abis/` and creates `ethers` clients for deployed contracts.
+- `socket/`: Socket.IO server and listeners.
 
-`mkdir keys`
+## How It Connects To The Rest Of The Repo
 
-`openssl ecparam -name prime256v1 -genkey -noout -out keys/server-private.pem`
+- Serves the frontend in `../client/`.
+- Uses ABIs and deployed addresses from `../contracts/`.
+- Exposes protected routes used by workflows in `../cre/`.
+- Shares Polymarket-related operational concerns with `../scripts/`.
 
-`openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt -in keys/server-private.pem -out keys/server-private-pkcs8.pem`
+## Environment
 
-`openssl ec -in keys/server-private.pem -pubout -out keys/server-public.pem`
+Start from `server/.env.template`.
 
-Create a JWT token at jwt.io.
+Common variables:
 
-Use `server-private-pkcs8.pem` for private key and set the algorithm to `ES256`
+- `CLIENT`: allowed frontend origin
+- `SERVER_PORT`
+- `MONGO_URI`
+- `JWT_SECRET`: used for user auth cookies
+- `JWT_ISSUER` and `PUBLIC_KEY_PATH`: used for server-to-server auth verification
+- `PRIVY_APP_ID` and `PRIVY_APP_SECRET`
+- `POLYGON_RPC_URL` and `OPERATOR_PRIVATE_KEY`
+- `LPPOOL_ADDRESS`, `VAULT_ADDRESS`, `NETTING_ENGINE_ADDRESS`, `CIRCUIT_BREAKER_ADDRESS`, `FEE_DISTRIBUTOR_ADDRESS`
+- `POLY_API_KEY`, `POLY_API_SECRET`, `POLY_PASSPHRASE`, `POLY_WALLET_PK`
+- `CLOB_API_URL` and optional `PROXY_URL`
 
-Update `.env`:
-```conf
-PUBLIC_KEY_PATH="/path/to/keys/server-public.pem"
-JWT_ISSUER="issuer_name"
+If `POLYGON_RPC_URL` or `OPERATOR_PRIVATE_KEY` is missing, the server still starts, but contract-backed features are skipped.
+
+## Commands
+
+```bash
+npm install
+npm run dev
+npm run build
+npm run start
+npm run test
+npm run lint
+npm run lint:fix
+npm run format
 ```
 
-## How to create a JWT token for user auth?
-Generate a JWT secret `openssl rand -hex 32`
+## Auth Notes
 
-Update `.env`:
-```conf
-JWT_SECRET="YOUR_SECRET"
-```
+There are two auth paths:
 
-Request cookie must contain `auth:ENCODED_JWT_TOKEN` encrypted with `process.env.JWT_SECRET`
+1. User authentication for wallet-linked frontend requests.
+2. Server-to-server authentication for protected routes used by workflows or backend-only clients.
+
+For server-to-server auth, generate an ES256 keypair and point `PUBLIC_KEY_PATH` at the public key file. For user auth, generate a random `JWT_SECRET`.
+
+## Typical Development Flow
+
+1. Copy `server/.env.template` into a local env file.
+2. Make sure MongoDB is reachable.
+3. If you need contract-backed features, deploy contracts in `../contracts/`, copy ABIs, and set the contract addresses here.
+4. Run `npm run dev`.
+
+## Related Docs
+
+- Root overview: [`../README.md`](../README.md)
+- Frontend: [`../client/README.md`](../client/README.md)
+- Contracts: [`../contracts/README.md`](../contracts/README.md)
+- CRE workflows: [`../cre/README.md`](../cre/README.md)

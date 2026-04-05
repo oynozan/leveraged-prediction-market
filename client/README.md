@@ -1,36 +1,56 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Client
 
-## Getting Started
+This folder contains the Next.js frontend for Pred Leverage. It is responsible for the user-facing experience: browsing markets, opening leveraged positions, depositing into the vault, withdrawing funds, and viewing LP data.
 
-First, run the development server:
+## What Lives Here
+
+- `src/app/`: App Router pages such as the home market list, `trade/`, `deposit/`, `withdraw/`, and `lp/`.
+- `src/components/`: Reusable UI for charts, market cards, tables, navbar, footer, and trading flows.
+- `src/lib/api.ts`: HTTP client helpers for backend API calls.
+- `src/components/providers/wallet.tsx`: Privy wallet and auth provider setup.
+- `src/hooks/` and `src/contexts/`: Real-time and stateful frontend behavior.
+
+## How It Connects To The Rest Of The Repo
+
+- Talks to `../server/` over HTTP and Socket.IO using `NEXT_PUBLIC_API_URL`.
+- Uses Privy for wallet-linked authentication and passes identity tokens to protected backend calls.
+- Displays data that ultimately comes from the backend, Polymarket, MongoDB, and on-chain contracts.
+- Uses `NEXT_PUBLIC_LPPOOL_ADDRESS` and `NEXT_PUBLIC_USDC_ADDRESS` for wallet-facing on-chain interactions.
+
+## Environment
+
+Start from `client/.env.template`.
+
+Required values:
+
+- `NEXT_PUBLIC_API_URL`: backend base URL, usually `http://localhost:5000`
+- `NEXT_PUBLIC_PRIVY_APP_ID`
+- `NEXT_PUBLIC_PRIVY_CLIENT_ID`
+- `NEXT_PUBLIC_LPPOOL_ADDRESS`
+- `NEXT_PUBLIC_USDC_ADDRESS`
+
+## Commands
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm run build
+npm run start
+npm run lint
+npm run format
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+The dev server runs on port `3000` by default.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Typical Development Flow
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+1. Start `../server/` first.
+2. Point `NEXT_PUBLIC_API_URL` at that backend.
+3. Run `npm run dev`.
+4. Open `http://localhost:3000`.
 
-## Learn More
+## Related Docs
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Root overview: [`../README.md`](../README.md)
+- Backend/API: [`../server/README.md`](../server/README.md)
+- Contracts: [`../contracts/README.md`](../contracts/README.md)
