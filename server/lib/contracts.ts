@@ -2,6 +2,47 @@ import { ethers } from "ethers";
 import * as fs from "fs";
 import * as path from "path";
 
+/* ---------- Retry-aware JSON-RPC provider ---------- */
+
+const MAX_RPC_RETRIES = 5;
+const BASE_RETRY_DELAY = 1_000;
+
+function isRetryableError(err: any): boolean {
+    const msg = String(err?.message ?? "");
+    return (
+        msg.includes("Too Many Requests") ||
+        msg.includes("-32005") ||
+        msg.includes("missing response") ||
+        msg.includes("ECONNRESET") ||
+        msg.includes("ETIMEDOUT") ||
+        msg.includes("rate limit") ||
+        msg.includes("429")
+    );
+}
+
+class RetryJsonRpcProvider extends ethers.JsonRpcProvider {
+    async send(method: string, params: Array<any>): Promise<any> {
+        for (let attempt = 0; attempt <= MAX_RPC_RETRIES; attempt++) {
+            try {
+                return await super.send(method, params);
+            } catch (err: any) {
+                if (isRetryableError(err) && attempt < MAX_RPC_RETRIES) {
+                    const delay = BASE_RETRY_DELAY * 2 ** attempt;
+                    console.warn(
+                        `[rpc] ${method} failed (attempt ${attempt + 1}/${MAX_RPC_RETRIES}), retry in ${delay}ms`,
+                    );
+                    await new Promise((r) => setTimeout(r, delay));
+                    continue;
+                }
+                throw err;
+            }
+        }
+        return super.send(method, params);
+    }
+}
+
+/* ---------- ABI loading ---------- */
+
 function loadABI(name: string): ethers.InterfaceAbi {
     const abiPath = path.join(__dirname, "..", "abis", `${name}.json`);
     return JSON.parse(fs.readFileSync(abiPath, "utf-8"));
@@ -18,7 +59,7 @@ const MULTICALL3_ABI = [
     "function tryAggregate(bool requireSuccess, tuple(address target, bytes callData)[] calls) public payable returns (tuple(bool success, bytes returnData)[])",
 ] as const;
 
-let provider: ethers.JsonRpcProvider;
+let provider: RetryJsonRpcProvider;
 let operatorWallet: ethers.Wallet;
 let managedSigner: ethers.NonceManager;
 let lpPool: ethers.Contract;
@@ -32,7 +73,7 @@ export function initContracts() {
     const rpcUrl = process.env.POLYGON_RPC_URL;
     if (!rpcUrl) throw new Error("POLYGON_RPC_URL is not set");
 
-    provider = new ethers.JsonRpcProvider(rpcUrl);
+    provider = new RetryJsonRpcProvider(rpcUrl);
 
     const pk = process.env.OPERATOR_PRIVATE_KEY;
     if (!pk) throw new Error("OPERATOR_PRIVATE_KEY is not set");
@@ -46,7 +87,7 @@ export function initContracts() {
     circuitBreaker = new ethers.Contract(requireEnv("CIRCUIT_BREAKER_ADDRESS"), circuitBreakerAbi, managedSigner);
     feeDistributor = new ethers.Contract(requireEnv("FEE_DISTRIBUTOR_ADDRESS"), feeDistributorAbi, managedSigner);
 
-    console.log("[contracts] Initialized contract instances on", rpcUrl, "(with NonceManager)");
+    console.log("[contracts] Initialized contract instances on", rpcUrl, "(with RetryProvider + NonceManager)");
 }
 
 function requireEnv(key: string): string {
@@ -57,6 +98,12 @@ function requireEnv(key: string): string {
 
 export function getProvider() {
     return provider;
+}
+
+export function createRetryProvider(rpcUrl?: string): ethers.JsonRpcProvider {
+    const url = rpcUrl ?? process.env.POLYGON_RPC_URL;
+    if (!url) throw new Error("POLYGON_RPC_URL is not set");
+    return new RetryJsonRpcProvider(url);
 }
 
 export function getOperatorWallet() {

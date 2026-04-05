@@ -31,3 +31,14 @@ export async function broadcastMarginUpdate(wallet: string): Promise<void> {
         console.error("[broadcast] Failed to broadcast margin update:", err);
     }
 }
+
+export interface TradeProgress {
+    step: number;
+    total: number;
+    label: string;
+}
+
+export function broadcastTradeProgress(wallet: string, progress: TradeProgress): void {
+    if (!_io) return;
+    _io.to(`wallet:${wallet}`).emit("trade:progress", progress);
+}

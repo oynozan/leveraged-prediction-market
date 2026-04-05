@@ -26,10 +26,16 @@ router.post("/reconcile/:wallet", async (req, res) => {
 
 router.get("/positions", async (_req, res) => {
     try {
-        const positions = await Position.find({ status: "open" }).lean();
+        const allWallets: string[] = await Position.distinct("wallet");
+        const openPositions = await Position.find({ status: "open" }).lean();
 
-        const byWallet: Record<string, { wallet: string; totalLockedMargin: number; positions: typeof positions }> = {};
-        for (const pos of positions) {
+        const byWallet: Record<string, { wallet: string; totalLockedMargin: number; positions: typeof openPositions }> = {};
+
+        for (const w of allWallets) {
+            byWallet[w] = { wallet: w, totalLockedMargin: 0, positions: [] };
+        }
+
+        for (const pos of openPositions) {
             if (!byWallet[pos.wallet]) {
                 byWallet[pos.wallet] = { wallet: pos.wallet, totalLockedMargin: 0, positions: [] };
             }
@@ -37,7 +43,7 @@ router.get("/positions", async (_req, res) => {
             byWallet[pos.wallet].positions.push(pos);
         }
 
-        res.json({ wallets: Object.values(byWallet), totalPositions: positions.length });
+        res.json({ wallets: Object.values(byWallet), totalPositions: openPositions.length });
     } catch (err: any) {
         console.error("[recovery] positions route error:", err);
         res.status(500).json({ error: err.message || "Failed to fetch positions" });

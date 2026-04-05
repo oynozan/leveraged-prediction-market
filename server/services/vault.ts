@@ -1,5 +1,6 @@
 import { ethers } from "ethers";
 import { getVaultContract } from "../lib/contracts";
+import { pollForReceipt } from "../lib/tx-utils";
 import { broadcastMarginUpdate } from "../socket/broadcast";
 
 export interface MarginInfo {
@@ -35,7 +36,7 @@ export async function lockMargin(user: string, amount: string): Promise<ethers.T
     const vault = getVaultContract();
     const tx = await vault.lockMargin(user, BigInt(amount));
     console.log(`[vault] lockMargin tx=${tx.hash}`);
-    const receipt = await tx.wait();
+    const receipt = await pollForReceipt(tx.hash, "lockMargin");
     console.log(`[vault] lockMargin confirmed block=${receipt.blockNumber}`);
     _marginCache.delete(user);
     broadcastMarginUpdate(user).catch(() => {});
@@ -47,7 +48,7 @@ export async function releaseMargin(user: string, amount: string): Promise<ether
     const vault = getVaultContract();
     const tx = await vault.releaseMargin(user, BigInt(amount));
     console.log(`[vault] releaseMargin tx=${tx.hash}`);
-    const receipt = await tx.wait();
+    const receipt = await pollForReceipt(tx.hash, "releaseMargin");
     console.log(`[vault] releaseMargin confirmed block=${receipt.blockNumber}`);
     _marginCache.delete(user);
     broadcastMarginUpdate(user).catch(() => {});
@@ -59,7 +60,7 @@ export async function borrowFromPool(conditionId: string, amount: string): Promi
     const vault = getVaultContract();
     const tx = await vault.borrowFromPool(conditionId, BigInt(amount));
     console.log(`[vault] borrowFromPool tx=${tx.hash}`);
-    const receipt = await tx.wait();
+    const receipt = await pollForReceipt(tx.hash, "borrowFromPool");
     console.log(`[vault] borrowFromPool confirmed block=${receipt.blockNumber}`);
     return receipt;
 }
@@ -69,7 +70,7 @@ export async function repayToPool(conditionId: string, amount: string): Promise<
     const vault = getVaultContract();
     const tx = await vault.repayToPool(conditionId, BigInt(amount));
     console.log(`[vault] repayToPool tx=${tx.hash}`);
-    const receipt = await tx.wait();
+    const receipt = await pollForReceipt(tx.hash, "repayToPool");
     console.log(`[vault] repayToPool confirmed block=${receipt.blockNumber}`);
     return receipt;
 }
@@ -79,7 +80,7 @@ export async function fundPolymarketWallet(amount: string): Promise<ethers.Trans
     const vault = getVaultContract();
     const tx = await vault.fundPolymarketWallet(BigInt(amount));
     console.log(`[vault] fundPolymarketWallet tx=${tx.hash}`);
-    const receipt = await tx.wait();
+    const receipt = await pollForReceipt(tx.hash, "fundPolymarketWallet");
     console.log(`[vault] fundPolymarketWallet confirmed block=${receipt.blockNumber}`);
     return receipt;
 }

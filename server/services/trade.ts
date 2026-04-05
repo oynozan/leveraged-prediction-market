@@ -21,7 +21,7 @@ import {
     fundPolymarketWallet,
 } from "./vault";
 import { getPoolStats } from "./pool";
-import { broadcastPositionUpdate } from "../socket/broadcast";
+import { broadcastPositionUpdate, broadcastTradeProgress } from "../socket/broadcast";
 
 const MAX_SLIPPAGE_BPS = 200;
 const USDC_DECIMALS = 6;
@@ -191,29 +191,39 @@ async function _executeTrade(params: TradeParams): Promise<TradeResult> {
             .finally(() => _pendingSettlements.delete(key));
         _pendingSettlements.set(key, settlePromise);
     } else {
-        const steps = 4;
+        const steps = 5;
         let step = 0;
-
-        step++;
-        console.log(`[trade] [${step}/${steps}] Lock margin: ${usd(marginMicro)} from user vault`);
-        await lockMargin(wallet, marginMicro.toString());
-
-        step++;
-        console.log(`[trade] [${step}/${steps}] Borrow LP: ${usd(borrowedMicro)} from LPPool`);
-        await borrowFromPool(conditionId, borrowedMicro.toString());
-
-        step++;
-        console.log(`[trade] [${step}/${steps}] Fund poly: ${usd(totalSettlement)} Vault -> Polymarket wallet`);
-        await fundPolymarketWallet(totalSettlement.toString());
-        const nativeBal = await getNativeUsdcBalance();
-        console.log(`[trade] Post-fund native USDC balance: ${nativeBal}`);
-
-        step++;
-        console.log(`[trade] [${step}/${steps}] Swap: ${usd(totalSettlement)} native USDC -> USDC.e`);
-        await swapNativeUsdcToUsdcE(totalSettlement);
-        await ensureExchangeApproval();
+        let marginLocked = false;
+        let lpBorrowed = false;
 
         try {
+            step++;
+            broadcastTradeProgress(wallet, { step, total: steps, label: "Locking margin..." });
+            console.log(`[trade] [${step}/${steps}] Lock margin: ${usd(marginMicro)} from user vault`);
+            await lockMargin(wallet, marginMicro.toString());
+            marginLocked = true;
+
+            step++;
+            broadcastTradeProgress(wallet, { step, total: steps, label: "Borrowing from LP..." });
+            console.log(`[trade] [${step}/${steps}] Borrow LP: ${usd(borrowedMicro)} from LPPool`);
+            await borrowFromPool(conditionId, borrowedMicro.toString());
+            lpBorrowed = true;
+
+            step++;
+            broadcastTradeProgress(wallet, { step, total: steps, label: "Funding wallet..." });
+            console.log(`[trade] [${step}/${steps}] Fund poly: ${usd(totalSettlement)} Vault -> Polymarket wallet`);
+            await fundPolymarketWallet(totalSettlement.toString());
+            const nativeBal = await getNativeUsdcBalance();
+            console.log(`[trade] Post-fund native USDC balance: ${nativeBal}`);
+
+            step++;
+            broadcastTradeProgress(wallet, { step, total: steps, label: "Swapping USDC..." });
+            console.log(`[trade] [${step}/${steps}] Swap: ${usd(totalSettlement)} native USDC -> USDC.e`);
+            await swapNativeUsdcToUsdcE(totalSettlement);
+            await ensureExchangeApproval();
+
+            step++;
+            broadcastTradeProgress(wallet, { step, total: steps, label: "Placing orders..." });
             console.log("[trade] Placing HEDGED CLOB orders (primary + opposite)...");
             const [primaryResult, oppositeResult] = await Promise.all([
                 placeMarketOrder({ tokenId: primaryTokenId, price: primaryOrderPrice, amount, side: 0, negRisk }),
@@ -223,8 +233,14 @@ async function _executeTrade(params: TradeParams): Promise<TradeResult> {
             console.log(`[trade] Primary order: ${orderId}`);
             console.log(`[trade] Hedge order:   ${oppositeResult.orderID}`);
         } catch (err) {
-            console.error("[trade] CLOB order FAILED, rolling back...", err);
-            await rollback(wallet, conditionId, marginMicro, borrowedMicro);
+            console.error("[trade] Settlement-first path FAILED at step", step, err);
+            broadcastTradeProgress(wallet, { step, total: steps, label: "Rolling back..." });
+            await rollback(
+                wallet,
+                conditionId,
+                marginLocked ? marginMicro : 0n,
+                lpBorrowed ? borrowedMicro : 0n,
+            );
             throw err;
         }
     }
@@ -265,17 +281,6 @@ async function _executeTrade(params: TradeParams): Promise<TradeResult> {
 
 /* ---------- Background settlement (optimistic path) ---------- */
 
-const STEP_TIMEOUT_MS = 60_000;
-
-function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
-    return Promise.race([
-        promise,
-        new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error(`[trade] ${label} timed out after ${STEP_TIMEOUT_MS / 1000}s`)), STEP_TIMEOUT_MS),
-        ),
-    ]);
-}
-
 async function settle(
     wallet: string,
     conditionId: string,
@@ -289,23 +294,23 @@ async function settle(
 
     step++;
     console.log(`[trade] [${step}/4] Lock margin: ${usd(marginMicro)} from user vault`);
-    await withTimeout(lockMargin(wallet, marginMicro.toString()), "lockMargin");
+    await lockMargin(wallet, marginMicro.toString());
 
     step++;
     console.log(`[trade] [${step}/4] Borrow LP: ${usd(borrowedMicro)} from LPPool`);
-    await withTimeout(borrowFromPool(conditionId, borrowedMicro.toString()), "borrowFromPool");
+    await borrowFromPool(conditionId, borrowedMicro.toString());
 
     step++;
     console.log(`[trade] [${step}/4] Fund poly: ${usd(totalSettlement)} Vault -> Polymarket wallet`);
-    await withTimeout(fundPolymarketWallet(totalSettlement.toString()), "fundPolymarketWallet");
+    await fundPolymarketWallet(totalSettlement.toString());
 
     const nativeBal = await getNativeUsdcBalance();
     console.log(`[trade] Post-fund native USDC balance: ${nativeBal}`);
 
     step++;
     console.log(`[trade] [${step}/4] Swap: ${usd(totalSettlement)} native USDC -> USDC.e`);
-    await withTimeout(swapNativeUsdcToUsdcE(totalSettlement), "swapNativeUsdcToUsdcE");
-    await withTimeout(ensureExchangeApproval(), "ensureExchangeApproval");
+    await swapNativeUsdcToUsdcE(totalSettlement);
+    await ensureExchangeApproval();
 
     await Position.updateOne(
         { wallet, conditionId, settled: false, status: "open" },
