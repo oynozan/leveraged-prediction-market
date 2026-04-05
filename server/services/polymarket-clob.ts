@@ -2,13 +2,26 @@ import crypto from "crypto";
 import { ethers } from "ethers";
 import { proxyAxios } from "../lib/proxy-axios";
 import { pollForReceipt } from "../lib/tx-utils";
-import { createRetryProvider } from "../lib/contracts";
+import { getProvider, getVaultAddress } from "../lib/contracts";
 
 const CTF_EXCHANGE = "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E";
 const NEG_RISK_CTF_EXCHANGE = "0xC5d563A36AE78145C45a50134d48A1215220f80a";
 const NEG_RISK_ADAPTER = "0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296";
 
 const COLLATERAL_DECIMALS = 6;
+
+async function waitForTx(tx: ethers.TransactionResponse, label: string): Promise<ethers.TransactionReceipt> {
+    try {
+        const r = await tx.wait();
+        if (!r) throw new Error("null receipt");
+        if (r.status === 0) throw new Error(`${label} tx reverted (${tx.hash})`);
+        return r;
+    } catch (err: any) {
+        if (err.message?.includes("reverted")) throw err;
+        console.warn(`[CLOB] ${label} tx.wait() failed, falling back to poll: ${err.message?.slice(0, 80)}`);
+        return pollForReceipt(tx.hash, label, tx.provider ?? undefined);
+    }
+}
 
 const CLOB_API = process.env.CLOB_API_URL || "https://clob.polymarket.com";
 
@@ -44,26 +57,85 @@ const ORDER_TYPES = {
 /* ---------- helpers ---------- */
 
 const ROUNDING_CONFIG: Record<string, { price: number; size: number; amount: number }> = {
-    "0.1": { price: 1, size: 2, amount: 3 },
-    "0.01": { price: 2, size: 2, amount: 4 },
-    "0.001": { price: 3, size: 2, amount: 5 },
+    "0.1":    { price: 1, size: 2, amount: 3 },
+    "0.01":   { price: 2, size: 2, amount: 4 },
+    "0.001":  { price: 3, size: 2, amount: 5 },
     "0.0001": { price: 4, size: 2, amount: 6 },
 };
 
+const USDC_MICRO = 1_000_000;
+
+function gcd(a: number, b: number): number {
+    a = Math.abs(a);
+    b = Math.abs(b);
+    while (b) { [a, b] = [b, a % b]; }
+    return a;
+}
+
+function lcm(a: number, b: number): number {
+    return (a / gcd(a, b)) * b;
+}
+
 function roundDown(num: number, decimals: number): number {
-    if (Number.isInteger(num)) return num;
-    return Math.floor(num * 10 ** decimals) / 10 ** decimals;
+    return Number(Math.floor(num * 10 ** decimals) / 10 ** decimals);
 }
 
-function roundUp(num: number, decimals: number): number {
-    if (Number.isInteger(num)) return num;
-    return Math.ceil(num * 10 ** decimals) / 10 ** decimals;
-}
+/**
+ * Compute makerAmount and takerAmount (as micro-unit integer strings) such that:
+ * 1. Their ratio equals the tick-aligned price EXACTLY
+ * 2. makerAmount has at most `size` decimal places (in human units)
+ * 3. takerAmount has at most `amount` decimal places (in human units)
+ *
+ * Uses reduced price fraction + LCM stepping to satisfy all constraints.
+ */
+function getTickAlignedAmounts(
+    side: SideValue,
+    amount: number,
+    price: number,
+    tickSize: string,
+): { makerAmount: string; takerAmount: string } {
+    const rc = ROUNDING_CONFIG[tickSize] || ROUNDING_CONFIG["0.01"];
+    const tickDenom = 10 ** rc.price;
+    const priceTicks = Math.round(roundDown(price, rc.price) * tickDenom);
 
-function decimalPlaces(num: number): number {
-    if (Number.isInteger(num)) return 0;
-    const arr = num.toString().split(".");
-    return arr.length <= 1 ? 0 : arr[1].length;
+    if (priceTicks <= 0 || priceTicks >= tickDenom) {
+        throw new Error(`Invalid price for order: ${price} (priceTicks=${priceTicks})`);
+    }
+
+    const g = gcd(priceTicks, tickDenom);
+    const pNum = priceTicks / g;
+    const pDen = tickDenom / g;
+
+    const makerDiv = 10 ** Math.max(0, 6 - rc.size);
+    const takerDiv = 10 ** Math.max(0, 6 - rc.amount);
+
+    const amountMicro = Math.floor(amount * USDC_MICRO);
+
+    if (side === Side.BUY) {
+        // BUY: makerAmount=USDC (size dec), takerAmount=tokens (amount dec)
+        // maker = k * pNum, taker = k * pDen
+        const kStepMaker = makerDiv / gcd(pNum, makerDiv);
+        const kStepTaker = takerDiv / gcd(pDen, takerDiv);
+        const kStep = lcm(kStepMaker, kStepTaker);
+        const unitMaker = kStep * pNum;
+        const k = Math.floor(amountMicro / unitMaker);
+        if (k <= 0) throw new Error(`Amount too small for tick-aligned order (need >=$${(unitMaker / USDC_MICRO).toFixed(6)})`);
+        const makerMicro = k * unitMaker;
+        const takerMicro = k * kStep * pDen;
+        return { makerAmount: makerMicro.toString(), takerAmount: takerMicro.toString() };
+    }
+
+    // SELL: makerAmount=tokens (size dec), takerAmount=USDC (amount dec)
+    // maker = k * pDen, taker = k * pNum
+    const kStepMaker = makerDiv / gcd(pDen, makerDiv);
+    const kStepTaker = takerDiv / gcd(pNum, takerDiv);
+    const kStep = lcm(kStepMaker, kStepTaker);
+    const unitMaker = kStep * pDen;
+    const k = Math.floor(amountMicro / unitMaker);
+    if (k <= 0) throw new Error(`Amount too small for tick-aligned order`);
+    const makerMicro = k * unitMaker;
+    const takerMicro = k * kStep * pNum;
+    return { makerAmount: makerMicro.toString(), takerAmount: takerMicro.toString() };
 }
 
 /* ---------- L2 HMAC-SHA256 authentication ---------- */
@@ -106,37 +178,6 @@ function generateSalt(): string {
     return Math.round(Math.random() * Date.now()).toString();
 }
 
-function getMarketOrderRawAmounts(
-    side: SideValue,
-    amount: number,
-    price: number,
-    roundConfig: { price: number; size: number; amount: number },
-): { rawMakerAmt: number; rawTakerAmt: number } {
-    const rawPrice = roundDown(price, roundConfig.price);
-
-    if (side === Side.BUY) {
-        const rawMakerAmt = roundDown(amount, roundConfig.size);
-        let rawTakerAmt = rawMakerAmt / rawPrice;
-        if (decimalPlaces(rawTakerAmt) > roundConfig.amount) {
-            rawTakerAmt = roundUp(rawTakerAmt, roundConfig.amount + 4);
-            if (decimalPlaces(rawTakerAmt) > roundConfig.amount) {
-                rawTakerAmt = roundDown(rawTakerAmt, roundConfig.amount);
-            }
-        }
-        return { rawMakerAmt, rawTakerAmt };
-    }
-
-    const rawMakerAmt = roundDown(amount, roundConfig.size);
-    let rawTakerAmt = rawMakerAmt * rawPrice;
-    if (decimalPlaces(rawTakerAmt) > roundConfig.amount) {
-        rawTakerAmt = roundUp(rawTakerAmt, roundConfig.amount + 4);
-        if (decimalPlaces(rawTakerAmt) > roundConfig.amount) {
-            rawTakerAmt = roundDown(rawTakerAmt, roundConfig.amount);
-        }
-    }
-    return { rawMakerAmt, rawTakerAmt };
-}
-
 async function buildAndSignOrder(params: {
     tokenId: string;
     price: number;
@@ -164,17 +205,15 @@ async function buildAndSignOrder(params: {
     const addr = wallet.address; // checksummed
 
     const salt = generateSalt();
-    const roundConfig = ROUNDING_CONFIG[params.tickSize] || ROUNDING_CONFIG["0.01"];
 
-    const { rawMakerAmt, rawTakerAmt } = getMarketOrderRawAmounts(
+    const { makerAmount, takerAmount } = getTickAlignedAmounts(
         params.side,
         params.amount,
         params.price,
-        roundConfig,
+        params.tickSize,
     );
 
-    const makerAmount = ethers.parseUnits(rawMakerAmt.toString(), COLLATERAL_DECIMALS).toString();
-    const takerAmount = ethers.parseUnits(rawTakerAmt.toString(), COLLATERAL_DECIMALS).toString();
+    console.log(`[CLOB] order amounts: maker=${makerAmount} taker=${takerAmount}`);
 
     const feeRateBps = params.feeRateBps.toString();
     const nonce = "0";
@@ -291,6 +330,7 @@ export async function placeMarketOrder(params: {
     negRisk: boolean;
     tickSize?: string;
     feeRateBps?: number;
+    orderType?: "FOK" | "GTC";
 }): Promise<PlaceOrderResult> {
     console.log(`[CLOB] placeMarketOrder tokenId=${params.tokenId} price=${params.price} amount=${params.amount} side=${params.side} negRisk=${params.negRisk}`);
     const tickSize = params.tickSize || await fetchTickSize(params.tokenId);
@@ -327,7 +367,7 @@ export async function placeMarketOrder(params: {
             signature: signedOrder.signature,
         },
         owner: apiKey,
-        orderType: "FOK",
+        orderType: params.orderType ?? "FOK",
     };
 
     const path = "/order";
@@ -341,8 +381,19 @@ export async function placeMarketOrder(params: {
         headers: { ...headers, "Content-Type": "application/json" },
     });
 
-    console.log(`[CLOB] Order response:`, resp.data);
-    return resp.data as PlaceOrderResult;
+    const result = resp.data;
+    console.log(`[CLOB] Order response:`, result);
+
+    const errorMsg = result.errorMsg || result.error || result.data?.error || "";
+    if (errorMsg) {
+        throw new Error(`CLOB order failed: ${errorMsg}`);
+    }
+
+    if (result.status && result.status !== "matched" && result.status !== "live") {
+        throw new Error(`CLOB order not filled: status=${result.status}`);
+    }
+
+    return result as PlaceOrderResult;
 }
 
 const USDC_E = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
@@ -350,11 +401,8 @@ const NATIVE_USDC = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359";
 const SWAP_ROUTER = "0xE592427A0AEce92De3Edee1F18E0157C05861564";
 const CTF_CONTRACT = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045";
 
-let _polyReadProvider: ethers.JsonRpcProvider | null = null;
-
 function getPolyReadProvider(): ethers.JsonRpcProvider {
-    if (!_polyReadProvider) _polyReadProvider = createRetryProvider();
-    return _polyReadProvider;
+    return getProvider();
 }
 
 export async function getPolymarketWalletBalance(): Promise<bigint> {
@@ -389,8 +437,7 @@ let _polymarketSignerAddress: string | null = null;
 
 function getPolymarketSigner(): ethers.NonceManager {
     if (_polymarketSigner) return _polymarketSigner;
-    const provider = createRetryProvider();
-    const wallet = getWallet().connect(provider);
+    const wallet = getWallet().connect(getProvider());
     _polymarketSignerAddress = wallet.address;
     _polymarketSigner = new ethers.NonceManager(wallet);
     return _polymarketSigner;
@@ -421,12 +468,22 @@ export async function swapNativeUsdcToUsdcE(amountMicro: bigint): Promise<void> 
     console.log(`[CLOB] swapNativeUsdcToUsdcE requested=${amountMicro}`);
     const signer = getPolymarketSigner();
 
+    const usdceBalance = await getPolymarketWalletBalance();
+    if (usdceBalance >= amountMicro) {
+        console.log(`[CLOB] USDC.e balance (${usdceBalance}) already covers requested (${amountMicro}), skipping swap`);
+        return;
+    }
+
     const nativeBalance = await getNativeUsdcBalance();
-    if (nativeBalance === 0n) {
+    if (nativeBalance === 0n && usdceBalance === 0n) {
         throw new Error(
-            `[CLOB] Polymarket wallet has 0 native USDC — cannot swap. Expected ${amountMicro}. ` +
-            `fundPolymarketWallet may have failed or sent to a different address.`,
+            `[CLOB] Polymarket wallet has 0 native USDC and 0 USDC.e — cannot swap. Expected ${amountMicro}.`,
         );
+    }
+
+    if (nativeBalance === 0n) {
+        console.warn(`[CLOB] No native USDC to swap but have ${usdceBalance} USDC.e, proceeding with partial balance`);
+        return;
     }
 
     const swapAmount = nativeBalance < amountMicro ? nativeBalance : amountMicro;
@@ -447,7 +504,7 @@ export async function swapNativeUsdcToUsdcE(amountMicro: bigint): Promise<void> 
     if (currentAllowance < swapAmount) {
         console.log("[CLOB] Approving SwapRouter for native USDC...");
         const approveTx = await nativeUsdc.approve(SWAP_ROUTER, ethers.MaxUint256);
-        await pollForReceipt(approveTx.hash, "CLOB:approveSwapRouter", approveTx.provider);
+        await waitForTx(approveTx, "CLOB:approveSwapRouter");
         console.log("[CLOB] SwapRouter approved");
     }
 
@@ -471,8 +528,100 @@ export async function swapNativeUsdcToUsdcE(amountMicro: bigint): Promise<void> 
         sqrtPriceLimitX96: 0n,
     });
     console.log(`[CLOB] Swap tx=${tx.hash}`);
-    await pollForReceipt(tx.hash, "CLOB:swap", tx.provider);
+    await waitForTx(tx, "CLOB:swap");
     console.log(`[CLOB] Swap confirmed. ${swapAmount} native USDC → USDC.e`);
+}
+
+/**
+ * Swaps USDC.e back to native USDC via Uniswap V3 using the Polymarket wallet.
+ * Called during close-settlement to return funds to the vault.
+ */
+export async function swapUsdcEToNativeUsdc(amountMicro: bigint): Promise<void> {
+    console.log(`[CLOB] swapUsdcEToNativeUsdc requested=${amountMicro}`);
+    const signer = getPolymarketSigner();
+
+    const usdceBalance = await getPolymarketWalletBalance();
+    if (usdceBalance === 0n) {
+        console.warn(`[CLOB] Polymarket wallet has 0 USDC.e — nothing to swap`);
+        return;
+    }
+
+    const swapAmount = usdceBalance < amountMicro ? usdceBalance : amountMicro;
+    if (swapAmount < amountMicro) {
+        console.warn(`[CLOB] USDC.e balance (${usdceBalance}) < requested (${amountMicro}), swapping available only`);
+    }
+
+    const usdce = new ethers.Contract(
+        USDC_E,
+        [
+            "function approve(address,uint256) returns (bool)",
+            "function allowance(address,address) view returns (uint256)",
+        ],
+        signer,
+    );
+
+    const currentAllowance: bigint = await usdce.allowance(getPolymarketSignerAddress(), SWAP_ROUTER);
+    if (currentAllowance < swapAmount) {
+        console.log("[CLOB] Approving SwapRouter for USDC.e...");
+        const approveTx = await usdce.approve(SWAP_ROUTER, ethers.MaxUint256);
+        await waitForTx(approveTx, "CLOB:approveSwapRouterUSDCe");
+        console.log("[CLOB] SwapRouter approved for USDC.e");
+    }
+
+    const router = new ethers.Contract(
+        SWAP_ROUTER,
+        [
+            "function exactInputSingle(tuple(address tokenIn, address tokenOut, uint24 fee, address recipient, uint256 deadline, uint256 amountIn, uint256 amountOutMinimum, uint160 sqrtPriceLimitX96)) payable returns (uint256)",
+        ],
+        signer,
+    );
+
+    console.log(`[CLOB] Swapping ${swapAmount} USDC.e → native USDC on Uniswap V3...`);
+    const tx = await router.exactInputSingle({
+        tokenIn: USDC_E,
+        tokenOut: NATIVE_USDC,
+        fee: 100,
+        recipient: getPolymarketSignerAddress(),
+        deadline: Math.floor(Date.now() / 1000) + 300,
+        amountIn: swapAmount,
+        amountOutMinimum: (swapAmount * 99n) / 100n,
+        sqrtPriceLimitX96: 0n,
+    });
+    console.log(`[CLOB] Swap tx=${tx.hash}`);
+    await waitForTx(tx, "CLOB:swapUsdcEToNative");
+    console.log(`[CLOB] Swap confirmed. ${swapAmount} USDC.e → native USDC`);
+}
+
+/**
+ * Transfers native USDC from the Polymarket wallet back to the Vault contract.
+ */
+export async function returnFundsToVault(amountMicro: bigint): Promise<void> {
+    console.log(`[CLOB] returnFundsToVault requested=${amountMicro}`);
+    const signer = getPolymarketSigner();
+    const vaultAddr = getVaultAddress();
+
+    const nativeBalance = await getNativeUsdcBalance();
+    if (nativeBalance === 0n) {
+        console.warn(`[CLOB] Polymarket wallet has 0 native USDC — nothing to return`);
+        return;
+    }
+
+    const transferAmount = nativeBalance < amountMicro ? nativeBalance : amountMicro;
+    if (transferAmount < amountMicro) {
+        console.warn(`[CLOB] Native USDC (${nativeBalance}) < requested (${amountMicro}), transferring available only`);
+    }
+
+    const usdc = new ethers.Contract(
+        NATIVE_USDC,
+        ["function transfer(address,uint256) returns (bool)"],
+        signer,
+    );
+
+    console.log(`[CLOB] Transferring ${transferAmount} native USDC → Vault (${vaultAddr})...`);
+    const tx = await usdc.transfer(vaultAddr, transferAmount);
+    console.log(`[CLOB] Transfer tx=${tx.hash}`);
+    await waitForTx(tx, "CLOB:returnToVault");
+    console.log(`[CLOB] Transfer confirmed. ${transferAmount} native USDC → Vault`);
 }
 
 /* ---------- CTF Exchange approval ---------- */
@@ -504,7 +653,7 @@ export async function ensureExchangeApproval(): Promise<void> {
         if (allowance < THRESHOLD) {
             console.log(`[CLOB] Approving ${spender} for USDC.e...`);
             const tx = await usdce.approve(spender, ethers.MaxUint256);
-            await pollForReceipt(tx.hash, `CLOB:approveUSDCe(${spender.slice(0, 8)})`, tx.provider);
+            await waitForTx(tx, `CLOB:approveUSDCe(${spender.slice(0, 8)})`);
             console.log(`[CLOB] Approved ${spender}`);
         } else {
             console.log(`[CLOB] ${spender} already approved (allowance=${allowance})`);
@@ -538,7 +687,7 @@ export async function ensureConditionalTokenApproval(): Promise<void> {
         if (!approved) {
             console.log(`[CLOB] setApprovalForAll ${spender} on CTF contract...`);
             const tx = await ctf.setApprovalForAll(spender, true);
-            await pollForReceipt(tx.hash, `CLOB:approveCTF(${spender.slice(0, 8)})`, tx.provider);
+            await waitForTx(tx, `CLOB:approveCTF(${spender.slice(0, 8)})`);
             console.log(`[CLOB] CTF approval granted to ${spender}`);
         } else {
             console.log(`[CLOB] ${spender} already approved for CTF tokens`);

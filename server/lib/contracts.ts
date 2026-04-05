@@ -20,24 +20,49 @@ function isRetryableError(err: any): boolean {
     );
 }
 
+const MAX_CONCURRENT_RPC = 4;
+let _rpcInFlight = 0;
+const _rpcQueue: Array<() => void> = [];
+
+function acquireSlot(): Promise<void> {
+    if (_rpcInFlight < MAX_CONCURRENT_RPC) {
+        _rpcInFlight++;
+        return Promise.resolve();
+    }
+    return new Promise((resolve) => _rpcQueue.push(() => { _rpcInFlight++; resolve(); }));
+}
+
+function releaseSlot(): void {
+    _rpcInFlight--;
+    const next = _rpcQueue.shift();
+    if (next) next();
+}
+
 class RetryJsonRpcProvider extends ethers.JsonRpcProvider {
     async send(method: string, params: Array<any>): Promise<any> {
-        for (let attempt = 0; attempt <= MAX_RPC_RETRIES; attempt++) {
-            try {
-                return await super.send(method, params);
-            } catch (err: any) {
-                if (isRetryableError(err) && attempt < MAX_RPC_RETRIES) {
-                    const delay = BASE_RETRY_DELAY * 2 ** attempt;
-                    console.warn(
-                        `[rpc] ${method} failed (attempt ${attempt + 1}/${MAX_RPC_RETRIES}), retry in ${delay}ms`,
-                    );
-                    await new Promise((r) => setTimeout(r, delay));
-                    continue;
+        await acquireSlot();
+        try {
+            for (let attempt = 0; attempt <= MAX_RPC_RETRIES; attempt++) {
+                try {
+                    return await super.send(method, params);
+                } catch (err: any) {
+                    if (isRetryableError(err) && attempt < MAX_RPC_RETRIES) {
+                        const delay = BASE_RETRY_DELAY * 2 ** attempt;
+                        if (attempt > 0) {
+                            console.warn(
+                                `[rpc] ${method} retry ${attempt + 1}/${MAX_RPC_RETRIES} in ${delay}ms`,
+                            );
+                        }
+                        await new Promise((r) => setTimeout(r, delay));
+                        continue;
+                    }
+                    throw err;
                 }
-                throw err;
             }
+            return super.send(method, params);
+        } finally {
+            releaseSlot();
         }
-        return super.send(method, params);
     }
 }
 
@@ -73,7 +98,7 @@ export function initContracts() {
     const rpcUrl = process.env.POLYGON_RPC_URL;
     if (!rpcUrl) throw new Error("POLYGON_RPC_URL is not set");
 
-    provider = new RetryJsonRpcProvider(rpcUrl);
+    provider = new RetryJsonRpcProvider(rpcUrl, 137, { staticNetwork: true });
 
     const pk = process.env.OPERATOR_PRIVATE_KEY;
     if (!pk) throw new Error("OPERATOR_PRIVATE_KEY is not set");
@@ -100,14 +125,19 @@ export function getProvider() {
     return provider;
 }
 
-export function createRetryProvider(rpcUrl?: string): ethers.JsonRpcProvider {
-    const url = rpcUrl ?? process.env.POLYGON_RPC_URL;
-    if (!url) throw new Error("POLYGON_RPC_URL is not set");
-    return new RetryJsonRpcProvider(url);
+export function getVaultAddress(): string {
+    return requireEnv("VAULT_ADDRESS");
 }
 
 export function getOperatorWallet() {
     return operatorWallet;
+}
+
+export function resetNonce() {
+    if (managedSigner) {
+        managedSigner.reset();
+        console.log("[contracts] NonceManager reset — will re-fetch nonce from network");
+    }
 }
 
 export function getLPPoolContract() {

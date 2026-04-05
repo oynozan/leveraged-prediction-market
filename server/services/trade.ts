@@ -5,10 +5,12 @@ import {
     fetchMidpoint,
     fetchBestPrice,
     fetchNegRisk,
+    fetchTickSize,
     getPolymarketWalletBalance,
     getConditionalTokenBalance,
-    getNativeUsdcBalance,
     swapNativeUsdcToUsdcE,
+    swapUsdcEToNativeUsdc,
+    returnFundsToVault,
     ensureExchangeApproval,
     ensureConditionalTokenApproval,
 } from "./polymarket-clob";
@@ -19,17 +21,25 @@ import {
     borrowFromPool,
     repayToPool,
     fundPolymarketWallet,
+    clearMarginCache,
 } from "./vault";
 import { getPoolStats } from "./pool";
+import { reconcileWallet } from "./recovery";
+import { resetNonce } from "../lib/contracts";
 import { broadcastPositionUpdate, broadcastTradeProgress } from "../socket/broadcast";
 
 const MAX_SLIPPAGE_BPS = 200;
 const USDC_DECIMALS = 6;
 const USDC_SCALE = 10 ** USDC_DECIMALS;
 
-function applySlippage(price: number): number {
-    const adj = price * (MAX_SLIPPAGE_BPS / 10_000);
-    return Math.min(0.999, price + adj);
+function roundTick(price: number, decimals = 2): number {
+    const factor = 10 ** decimals;
+    return Math.round(price * factor) / factor;
+}
+
+function applySlippage(price: number, tickDecimals = 2): number {
+    const raw = price * (1 + MAX_SLIPPAGE_BPS / 10_000);
+    return Math.min(0.999, roundTick(raw, tickDecimals));
 }
 
 function toMicro(usd: number): bigint {
@@ -98,16 +108,29 @@ async function _executeTrade(params: TradeParams): Promise<TradeResult> {
     const primaryTokenId = isYes ? yesTokenId : noTokenId;
 
     /* --- 2. CLOB data --- */
-    const [midpoint, bestPrice] = await Promise.all([
-        fetchMidpoint(primaryTokenId),
-        fetchBestPrice(primaryTokenId, "BUY"),
-    ]);
+    const midpoint = await fetchMidpoint(primaryTokenId);
     if (midpoint <= 0 || midpoint >= 1) throw new Error("Invalid midpoint price");
     if (midpoint < 0.10 || midpoint > 0.90) {
-        throw new Error("Trading disabled for markets with odds below 10% or above 90%");
+        throw new Error(
+            `Trading disabled: midpoint $${midpoint.toFixed(4)} outside 10%-90% range`,
+        );
     }
 
-    const price = bestPrice;
+    let price: number;
+    try {
+        const best = await fetchBestPrice(primaryTokenId, "BUY");
+        const deviation = Math.abs(best - midpoint) / midpoint;
+        if (deviation > 0.15) {
+            console.warn(`[trade] bestPrice ($${best.toFixed(4)}) deviates ${(deviation * 100).toFixed(0)}% from midpoint ($${midpoint.toFixed(4)}), using midpoint`);
+            price = midpoint;
+        } else {
+            price = best;
+        }
+    } catch {
+        console.warn(`[trade] fetchBestPrice failed, using midpoint ($${midpoint.toFixed(4)})`);
+        price = midpoint;
+    }
+
     const shares = Math.floor((amount / price) * USDC_SCALE) / USDC_SCALE;
 
     /* --- 3. Compute margin & borrow amounts (2x cost for YES+NO hedge) --- */
@@ -132,7 +155,19 @@ async function _executeTrade(params: TradeParams): Promise<TradeResult> {
     console.log(`[trade]   Shares:       ${shares}`);
     console.log(`[trade]   Liq price:    $${liqPrice.toFixed(4)}`);
 
-    /* --- 4. Validate margin --- */
+    /* --- 4. Reconcile & validate margin --- */
+    resetNonce();
+    clearMarginCache(wallet);
+    try {
+        const rc = await reconcileWallet(wallet);
+        if (rc.status === "recovered") {
+            console.log(`[trade] Auto-reconcile released ${usd(rc.excessReleased)} zombie-locked margin`);
+        }
+    } catch (err: any) {
+        console.warn(`[trade] Auto-reconcile failed (non-fatal): ${err.message?.slice(0, 100)}`);
+    }
+
+    clearMarginCache(wallet);
     const margin = await getUserMargin(wallet);
     const availableMicro = BigInt(margin.available);
 
@@ -154,10 +189,14 @@ async function _executeTrade(params: TradeParams): Promise<TradeResult> {
     }
 
     /* --- 6. Decide path & place orders --- */
-    const negRisk = await fetchNegRisk(primaryTokenId);
-    const primaryOrderPrice = applySlippage(price);
-    const oppositePrice = 1 - price;
-    const oppositeOrderPrice = applySlippage(oppositePrice);
+    const [negRisk, tickSize] = await Promise.all([
+        fetchNegRisk(primaryTokenId),
+        fetchTickSize(primaryTokenId),
+    ]);
+    const tickDecimals = Math.max(1, -Math.log10(parseFloat(tickSize)));
+    const primaryOrderPrice = applySlippage(price, tickDecimals);
+    const oppositePrice = roundTick(1 - price, tickDecimals);
+    const oppositeOrderPrice = applySlippage(oppositePrice, tickDecimals);
     const polyBalance = await getPolymarketWalletBalance();
     const isOptimistic = polyBalance >= hedgeCost;
 
@@ -176,14 +215,14 @@ async function _executeTrade(params: TradeParams): Promise<TradeResult> {
     let orderId: string;
 
     if (isOptimistic) {
-        console.log("[trade] Placing HEDGED CLOB orders (primary + opposite)...");
+        console.log("[trade] Placing HEDGED CLOB orders (primary FOK + opposite GTC)...");
         const [primaryResult, oppositeResult] = await Promise.all([
-            placeMarketOrder({ tokenId: primaryTokenId, price: primaryOrderPrice, amount, side: 0, negRisk }),
-            placeMarketOrder({ tokenId: isYes ? noTokenId : yesTokenId, price: oppositeOrderPrice, amount, side: 0, negRisk }),
+            placeMarketOrder({ tokenId: primaryTokenId, price: primaryOrderPrice, amount, side: 0, negRisk, tickSize, orderType: "FOK" }),
+            placeMarketOrder({ tokenId: isYes ? noTokenId : yesTokenId, price: oppositeOrderPrice, amount, side: 0, negRisk, tickSize, orderType: "GTC" }),
         ]);
         orderId = primaryResult.orderID;
         console.log(`[trade] Primary order: ${orderId}`);
-        console.log(`[trade] Hedge order:   ${oppositeResult.orderID}`);
+        console.log(`[trade] Hedge order:   ${oppositeResult.orderID} (GTC)`);
 
         const key = settlementKey(wallet, conditionId);
         const settlePromise = settle(wallet, conditionId, marginMicro, borrowedMicro, totalSettlement)
@@ -213,8 +252,6 @@ async function _executeTrade(params: TradeParams): Promise<TradeResult> {
             broadcastTradeProgress(wallet, { step, total: steps, label: "Funding wallet..." });
             console.log(`[trade] [${step}/${steps}] Fund poly: ${usd(totalSettlement)} Vault -> Polymarket wallet`);
             await fundPolymarketWallet(totalSettlement.toString());
-            const nativeBal = await getNativeUsdcBalance();
-            console.log(`[trade] Post-fund native USDC balance: ${nativeBal}`);
 
             step++;
             broadcastTradeProgress(wallet, { step, total: steps, label: "Swapping USDC..." });
@@ -224,14 +261,14 @@ async function _executeTrade(params: TradeParams): Promise<TradeResult> {
 
             step++;
             broadcastTradeProgress(wallet, { step, total: steps, label: "Placing orders..." });
-            console.log("[trade] Placing HEDGED CLOB orders (primary + opposite)...");
+            console.log("[trade] Placing HEDGED CLOB orders (primary FOK + opposite GTC)...");
             const [primaryResult, oppositeResult] = await Promise.all([
-                placeMarketOrder({ tokenId: primaryTokenId, price: primaryOrderPrice, amount, side: 0, negRisk }),
-                placeMarketOrder({ tokenId: isYes ? noTokenId : yesTokenId, price: oppositeOrderPrice, amount, side: 0, negRisk }),
+                placeMarketOrder({ tokenId: primaryTokenId, price: primaryOrderPrice, amount, side: 0, negRisk, tickSize, orderType: "FOK" }),
+                placeMarketOrder({ tokenId: isYes ? noTokenId : yesTokenId, price: oppositeOrderPrice, amount, side: 0, negRisk, tickSize, orderType: "GTC" }),
             ]);
             orderId = primaryResult.orderID;
             console.log(`[trade] Primary order: ${orderId}`);
-            console.log(`[trade] Hedge order:   ${oppositeResult.orderID}`);
+            console.log(`[trade] Hedge order:   ${oppositeResult.orderID} (GTC)`);
         } catch (err) {
             console.error("[trade] Settlement-first path FAILED at step", step, err);
             broadcastTradeProgress(wallet, { step, total: steps, label: "Rolling back..." });
@@ -291,33 +328,45 @@ async function settle(
     console.log(`[trade] === BACKGROUND SETTLEMENT START (wallet=${wallet.slice(0, 10)}...) ===`);
 
     let step = 0;
+    let marginLocked = false;
+    let lpBorrowed = false;
 
-    step++;
-    console.log(`[trade] [${step}/4] Lock margin: ${usd(marginMicro)} from user vault`);
-    await lockMargin(wallet, marginMicro.toString());
+    try {
+        step++;
+        console.log(`[trade] [${step}/4] Lock margin: ${usd(marginMicro)} from user vault`);
+        await lockMargin(wallet, marginMicro.toString());
+        marginLocked = true;
 
-    step++;
-    console.log(`[trade] [${step}/4] Borrow LP: ${usd(borrowedMicro)} from LPPool`);
-    await borrowFromPool(conditionId, borrowedMicro.toString());
+        step++;
+        console.log(`[trade] [${step}/4] Borrow LP: ${usd(borrowedMicro)} from LPPool`);
+        await borrowFromPool(conditionId, borrowedMicro.toString());
+        lpBorrowed = true;
 
-    step++;
-    console.log(`[trade] [${step}/4] Fund poly: ${usd(totalSettlement)} Vault -> Polymarket wallet`);
-    await fundPolymarketWallet(totalSettlement.toString());
+        step++;
+        console.log(`[trade] [${step}/4] Fund poly: ${usd(totalSettlement)} Vault -> Polymarket wallet`);
+        await fundPolymarketWallet(totalSettlement.toString());
 
-    const nativeBal = await getNativeUsdcBalance();
-    console.log(`[trade] Post-fund native USDC balance: ${nativeBal}`);
+        step++;
+        console.log(`[trade] [${step}/4] Swap: ${usd(totalSettlement)} native USDC -> USDC.e`);
+        await swapNativeUsdcToUsdcE(totalSettlement);
+        await ensureExchangeApproval();
 
-    step++;
-    console.log(`[trade] [${step}/4] Swap: ${usd(totalSettlement)} native USDC -> USDC.e`);
-    await swapNativeUsdcToUsdcE(totalSettlement);
-    await ensureExchangeApproval();
+        await Position.updateOne(
+            { wallet, conditionId, settled: false, status: "open" },
+            { $set: { settled: true } },
+        );
 
-    await Position.updateOne(
-        { wallet, conditionId, settled: false, status: "open" },
-        { $set: { settled: true } },
-    );
-
-    console.log(`[trade] === BACKGROUND SETTLEMENT DONE ===`);
+        console.log(`[trade] === BACKGROUND SETTLEMENT DONE ===`);
+    } catch (err) {
+        console.error(`[trade] Background settlement FAILED at step ${step}, rolling back...`, err);
+        await rollback(
+            wallet,
+            conditionId,
+            marginLocked ? marginMicro : 0n,
+            lpBorrowed ? borrowedMicro : 0n,
+        );
+        throw err;
+    }
 }
 
 /* ---------- Close position ---------- */
@@ -364,13 +413,15 @@ async function _closePosition(positionId: string, wallet: string) {
     console.log(`[trade]   Borrowed:   ${usd(borrowedMicro)} (${wasSettled ? "from LPPool" : "NOT borrowed"})`);
 
     /* --- Fetch balances & CLOB data for BOTH sides --- */
-    const [yesBal, noBal, negRisk] = await Promise.all([
+    const [yesBal, noBal, negRisk, tickSize] = await Promise.all([
         getConditionalTokenBalance(yesTokenId),
         getConditionalTokenBalance(noTokenId),
         fetchNegRisk(yesTokenId),
+        fetchTickSize(yesTokenId),
     ]);
+    const tickDec = Math.max(1, -Math.log10(parseFloat(tickSize)));
 
-    console.log(`[trade]   YES tokens: ${yesBal} | NO tokens: ${noBal}`);
+    console.log(`[trade]   YES tokens: ${yesBal} | NO tokens: ${noBal} | tickSize: ${tickSize}`);
 
     await ensureExchangeApproval();
     await ensureConditionalTokenApproval();
@@ -379,16 +430,16 @@ async function _closePosition(positionId: string, wallet: string) {
 
     if (yesBal > 0) {
         const yesMid = await fetchMidpoint(yesTokenId);
-        const yesSellPrice = Math.max(0.001, yesMid * (1 - MAX_SLIPPAGE_BPS / 10_000));
-        console.log(`[trade] Selling YES: ${yesBal} tokens @ $${yesSellPrice.toFixed(4)}`);
-        sellPromises.push(placeMarketOrder({ tokenId: yesTokenId, price: yesSellPrice, amount: yesBal, side: 1, negRisk }));
+        const yesSellPrice = roundTick(Math.max(0.01, yesMid * (1 - MAX_SLIPPAGE_BPS / 10_000)), tickDec);
+        console.log(`[trade] Selling YES: ${yesBal} tokens @ $${yesSellPrice.toFixed(tickDec)}`);
+        sellPromises.push(placeMarketOrder({ tokenId: yesTokenId, price: yesSellPrice, amount: yesBal, side: 1, negRisk, tickSize }));
     }
 
     if (noBal > 0) {
         const noMid = await fetchMidpoint(noTokenId);
-        const noSellPrice = Math.max(0.001, noMid * (1 - MAX_SLIPPAGE_BPS / 10_000));
-        console.log(`[trade] Selling NO:  ${noBal} tokens @ $${noSellPrice.toFixed(4)}`);
-        sellPromises.push(placeMarketOrder({ tokenId: noTokenId, price: noSellPrice, amount: noBal, side: 1, negRisk }));
+        const noSellPrice = roundTick(Math.max(0.01, noMid * (1 - MAX_SLIPPAGE_BPS / 10_000)), tickDec);
+        console.log(`[trade] Selling NO:  ${noBal} tokens @ $${noSellPrice.toFixed(tickDec)}`);
+        sellPromises.push(placeMarketOrder({ tokenId: noTokenId, price: noSellPrice, amount: noBal, side: 1, negRisk, tickSize }));
     }
 
     if (sellPromises.length === 0) throw new Error("No conditional tokens to sell");
@@ -423,24 +474,41 @@ async function closeSettle(
 ): Promise<void> {
     console.log(`[trade] === CLOSE SETTLEMENT START ===`);
 
+    const returnAmount = marginMicro + borrowedMicro;
+
+    /* --- Sweep funds: poly wallet USDC.e → native USDC → vault --- */
+    if (returnAmount > 0n) {
+        try {
+            console.log(`[trade]   Sweeping USDC.e → native USDC (${usd(returnAmount)})...`);
+            await swapUsdcEToNativeUsdc(returnAmount);
+            console.log(`[trade]   Transferring native USDC → Vault...`);
+            await returnFundsToVault(returnAmount);
+            console.log(`[trade]   Funds returned to Vault`);
+        } catch (err: any) {
+            console.error("[trade]   Fund sweep FAILED:", err.message?.slice(0, 120));
+        }
+    }
+
+    /* --- Release margin (accounting only) --- */
     try {
         if (marginMicro > 0n) {
             console.log(`[trade]   Releasing margin: ${usd(marginMicro)} back to user vault`);
             await releaseMargin(wallet, marginMicro.toString());
             console.log(`[trade]   Margin released`);
         }
-    } catch (err) {
-        console.error("[trade]   releaseMargin on close FAILED:", err);
+    } catch (err: any) {
+        console.error("[trade]   releaseMargin on close FAILED:", err.message?.slice(0, 120));
     }
 
+    /* --- Repay LP (needs actual USDC in vault) --- */
     try {
         if (borrowedMicro > 0n) {
             console.log(`[trade]   Repaying LP: ${usd(borrowedMicro)} back to LPPool`);
             await repayToPool(conditionId, borrowedMicro.toString());
             console.log(`[trade]   LP repaid`);
         }
-    } catch (err) {
-        console.error("[trade]   repayToPool on close FAILED:", err);
+    } catch (err: any) {
+        console.error("[trade]   repayToPool on close FAILED:", err.message?.slice(0, 120));
         await Position.updateOne(
             { wallet, conditionId, status: "closed" },
             { $set: { settled: false } },
@@ -448,8 +516,6 @@ async function closeSettle(
     }
 
     console.log(`[trade] === CLOSE SETTLEMENT DONE ===`);
-    console.log(`[trade]   Margin ${usd(marginMicro)} returned to Vault`);
-    if (borrowedMicro > 0n) console.log(`[trade]   LP ${usd(borrowedMicro)} repaid to LPPool`);
 }
 
 /* ---------- Rollback (settlement-first path, CLOB failed) ---------- */
@@ -461,13 +527,18 @@ async function rollback(
     borrowedMicro: bigint,
 ): Promise<void> {
     console.log(`[trade] === ROLLBACK START ===`);
+    console.log(`[trade]   marginToRelease=${marginMicro} borrowToRepay=${borrowedMicro}`);
 
-    try {
-        console.log(`[trade]   Releasing margin: ${usd(marginMicro)} back to user vault`);
-        await releaseMargin(wallet, marginMicro.toString());
-        console.log(`[trade]   Margin released`);
-    } catch (err) {
-        console.error("[trade]   releaseMargin rollback FAILED:", err);
+    if (marginMicro > 0n) {
+        try {
+            console.log(`[trade]   Releasing margin: ${usd(marginMicro)} back to user vault`);
+            await releaseMargin(wallet, marginMicro.toString());
+            console.log(`[trade]   Margin released`);
+        } catch (err: any) {
+            console.error("[trade]   releaseMargin rollback FAILED:", err.message?.slice(0, 120));
+        }
+    } else {
+        console.log(`[trade]   Skipping releaseMargin (nothing was locked)`);
     }
 
     if (borrowedMicro > 0n) {
@@ -475,9 +546,11 @@ async function rollback(
             console.log(`[trade]   Repaying LP: ${usd(borrowedMicro)} back to LPPool`);
             await repayToPool(conditionId, borrowedMicro.toString());
             console.log(`[trade]   LP repaid`);
-        } catch (err) {
-            console.error("[trade]   repayToPool rollback FAILED:", err);
+        } catch (err: any) {
+            console.error("[trade]   repayToPool rollback FAILED:", err.message?.slice(0, 120));
         }
+    } else {
+        console.log(`[trade]   Skipping repayToPool (nothing was borrowed)`);
     }
 
     console.log(`[trade] === ROLLBACK DONE ===`);

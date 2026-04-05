@@ -45,9 +45,9 @@ router.post("/", authRequired, async (req: Request, res: Response) => {
         const raw = (err as any)?.response?.data?.error
             || (err as any)?.response?.data?.message
             || (err instanceof Error ? err.message : "Trade failed");
-        const msg = raw.replace(/\b(\d{4,})\b/g, (_: string, n: string) => {
+        const msg = raw.replace(/(?<!\.\d*)(?<!\d)\b(\d{7,})\b(?!\.\d)/g, (_: string, n: string) => {
             const num = parseInt(n, 10);
-            if (num >= 1000) return `$${(num / 1_000_000).toFixed(2)}`;
+            if (num >= 1_000_000) return `$${(num / 1_000_000).toFixed(2)}`;
             return n;
         });
         console.error("Trade error:", msg);

@@ -1,5 +1,10 @@
 import Position from "../models/Positions";
 import { getUserMargin, releaseMargin, repayToPool } from "./vault";
+import {
+    getPolymarketWalletBalance,
+    swapUsdcEToNativeUsdc,
+    returnFundsToVault,
+} from "./polymarket-clob";
 import { broadcastMarginUpdate } from "../socket/broadcast";
 
 interface RecoveryResult {
@@ -109,14 +114,47 @@ async function reconcileFailedRepayments(): Promise<{ repaid: number; failed: nu
 }
 
 /**
- * Full reconciliation: find all wallets that have ever had positions,
- * reconcile each one, and retry failed LP repayments.
+ * Sweep any USDC.e sitting in the Polymarket wallet back to the Vault.
+ * This recovers funds from closed trades that never returned USDC.
+ */
+export async function sweepFundsToVault(): Promise<{ swept: string }> {
+    console.log("[recovery] === SWEEP FUNDS TO VAULT ===");
+
+    const usdceBal = await getPolymarketWalletBalance();
+    console.log(`[recovery] Polymarket wallet USDC.e balance: ${usdceBal}`);
+
+    if (usdceBal === 0n) {
+        console.log("[recovery] Nothing to sweep");
+        return { swept: "0" };
+    }
+
+    try {
+        console.log(`[recovery] Swapping ${usdceBal} USDC.e → native USDC...`);
+        await swapUsdcEToNativeUsdc(usdceBal);
+
+        console.log(`[recovery] Transferring native USDC → Vault...`);
+        await returnFundsToVault(usdceBal);
+
+        console.log(`[recovery] Sweep complete: ${usdceBal} returned to Vault`);
+        return { swept: usdceBal.toString() };
+    } catch (err: any) {
+        console.error(`[recovery] Sweep failed:`, err.message);
+        return { swept: "0" };
+    }
+}
+
+/**
+ * Full reconciliation: sweep funds back to vault, reconcile wallets,
+ * and retry failed LP repayments.
  */
 export async function reconcileAll(): Promise<{
     results: RecoveryResult[];
     repayments: { repaid: number; failed: number };
+    sweep: { swept: string };
 }> {
     console.log("[recovery] === FULL RECONCILIATION START ===");
+
+    const sweep = { swept: "0" };
 
     const fixedCount = await Position.updateMany(
         { status: "closed", borrowedAmount: { $gt: 0 }, settled: true },
@@ -154,8 +192,8 @@ export async function reconcileAll(): Promise<{
     const errors = results.filter(r => r.status === "error").length;
 
     console.log(
-        `[recovery] === RECONCILIATION DONE === wallets=${wallets.length} recovered=${recovered} errors=${errors} lpRepaid=${repayments.repaid} lpFailed=${repayments.failed}`,
+        `[recovery] === RECONCILIATION DONE === wallets=${wallets.length} recovered=${recovered} errors=${errors} lpRepaid=${repayments.repaid} lpFailed=${repayments.failed} swept=${sweep.swept}`,
     );
 
-    return { results, repayments };
+    return { results, repayments, sweep };
 }
