@@ -28,7 +28,7 @@ import { reconcileWallet } from "./recovery";
 import { resetNonce } from "../lib/contracts";
 import { broadcastPositionUpdate, broadcastTradeProgress } from "../socket/broadcast";
 
-const MAX_SLIPPAGE_BPS = 200;
+const MAX_SLIPPAGE_BPS = 500;
 const USDC_DECIMALS = 6;
 const USDC_SCALE = 10 ** USDC_DECIMALS;
 
@@ -38,8 +38,9 @@ function roundTick(price: number, decimals = 2): number {
 }
 
 function applySlippage(price: number, tickDecimals = 2): number {
+    const tickMax = 1 - 1 / (10 ** tickDecimals); // e.g. 0.99 for 2, 0.999 for 3
     const raw = price * (1 + MAX_SLIPPAGE_BPS / 10_000);
-    return Math.min(0.999, roundTick(raw, tickDecimals));
+    return Math.min(tickMax, roundTick(raw, tickDecimals));
 }
 
 function toMicro(usd: number): bigint {

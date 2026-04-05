@@ -111,6 +111,8 @@ function getTickAlignedAmounts(
 
     const amountMicro = Math.floor(amount * USDC_MICRO);
 
+    const MIN_ORDER_MICRO = USDC_MICRO; // $1 minimum
+
     if (side === Side.BUY) {
         // BUY: makerAmount=USDC (size dec), takerAmount=tokens (amount dec)
         // maker = k * pNum, taker = k * pDen
@@ -118,8 +120,9 @@ function getTickAlignedAmounts(
         const kStepTaker = takerDiv / gcd(pDen, takerDiv);
         const kStep = lcm(kStepMaker, kStepTaker);
         const unitMaker = kStep * pNum;
-        const k = Math.floor(amountMicro / unitMaker);
-        if (k <= 0) throw new Error(`Amount too small for tick-aligned order (need >=$${(unitMaker / USDC_MICRO).toFixed(6)})`);
+        let k = Math.floor(amountMicro / unitMaker);
+        if (k * unitMaker < MIN_ORDER_MICRO) k = Math.ceil(MIN_ORDER_MICRO / unitMaker);
+        if (k <= 0) k = 1;
         const makerMicro = k * unitMaker;
         const takerMicro = k * kStep * pDen;
         return { makerAmount: makerMicro.toString(), takerAmount: takerMicro.toString() };
@@ -131,8 +134,8 @@ function getTickAlignedAmounts(
     const kStepTaker = takerDiv / gcd(pNum, takerDiv);
     const kStep = lcm(kStepMaker, kStepTaker);
     const unitMaker = kStep * pDen;
-    const k = Math.floor(amountMicro / unitMaker);
-    if (k <= 0) throw new Error(`Amount too small for tick-aligned order`);
+    let k = Math.floor(amountMicro / unitMaker);
+    if (k <= 0) k = 1;
     const makerMicro = k * unitMaker;
     const takerMicro = k * kStep * pNum;
     return { makerAmount: makerMicro.toString(), takerAmount: takerMicro.toString() };
