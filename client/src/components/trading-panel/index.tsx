@@ -160,6 +160,7 @@ export function TradingPanel({ market }: TradingPanelProps) {
     }, [sliderValue, availableUsd, leverage]);
 
     const numAmount = parseFloat(amount) || 0;
+    const oddsOutOfRange = currentYesPrice < 0.10 || currentYesPrice > 0.90;
     const marginRequired = numAmount > 0 ? numAmount / leverage : 0;
     const shares = numAmount > 0 && currentPrice > 0 ? numAmount / currentPrice : 0;
     const liqPrice =
@@ -216,11 +217,11 @@ export function TradingPanel({ market }: TradingPanelProps) {
     return (
         <div className="flex flex-col h-full bg-(--surface) overflow-y-auto">
             {/* Leverage badge */}
-            <div className="flex items-center gap-0 border-b border-border">
-                <div className="flex items-center gap-1 px-2 py-2">
+            <div className="flex items-center justify-end gap-0 border-b border-border">
+                <div className="flex items-center justify-end gap-1 px-2 py-2">
                     <button
                         onClick={() => setLeverageModalOpen(true)}
-                        className="text-[10px] font-semibold text-primary bg-primary/15 px-5 py-0.5 rounded cursor-pointer hover:bg-primary/25 transition-colors"
+                        className="text-[10px] font-semibold text-white/80 bg-white/10 px-5 py-0.5 rounded cursor-pointer hover:bg-white/15 transition-colors"
                     >
                         {leverage}x
                     </button>
@@ -307,7 +308,7 @@ export function TradingPanel({ market }: TradingPanelProps) {
                 {/* Trade button */}
                 <button
                     onClick={handleTrade}
-                    disabled={loading || numAmount < 1}
+                    disabled={loading || numAmount < 1 || oddsOutOfRange}
                     className={`w-full py-2.5 text-sm font-medium rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
                         outcome === "Yes"
                             ? "bg-success hover:bg-success/90 text-white"
@@ -334,6 +335,8 @@ export function TradingPanel({ market }: TradingPanelProps) {
                             </svg>
                             Executing...
                         </span>
+                    ) : oddsOutOfRange ? (
+                        "Trading Disabled (odds outside 10–90%)"
                     ) : outcome === "Yes" ? (
                         "Buy Yes"
                     ) : (

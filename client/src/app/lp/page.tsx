@@ -203,9 +203,9 @@ export default function LPPage() {
         try {
             await wallet.switchChain(137);
             const provider = await wallet.getEthereumProvider();
-            const transport = custom(provider);
-            const walletClient = createWalletClient({ chain: polygon, transport, account: wallet.address as Address });
-            const publicClient = createPublicClient({ chain: polygon, transport });
+            const walletTransport = custom(provider);
+            const walletClient = createWalletClient({ chain: polygon, transport: walletTransport, account: wallet.address as Address });
+            const publicClient = createPublicClient({ chain: polygon, transport: http() });
 
             console.log("[lp] checking allowance...");
             const allowance = await publicClient.readContract({
@@ -227,7 +227,7 @@ export default function LPPage() {
                     args: [LPPOOL_ADDRESS, MAX],
                 });
                 console.log("[lp] approve tx sent:", approveTx);
-                await publicClient.waitForTransactionReceipt({ hash: approveTx });
+                await publicClient.waitForTransactionReceipt({ hash: approveTx, timeout: 60_000 });
                 console.log("[lp] approve confirmed");
             }
 
@@ -240,13 +240,20 @@ export default function LPPage() {
                 args: [modalPool.conditionId as `0x${string}`, parsed],
             });
             console.log("[lp] deposit tx sent:", depositTx);
-            await publicClient.waitForTransactionReceipt({ hash: depositTx });
-            console.log("[lp] deposit confirmed");
 
-            toast.success("Liquidity provided successfully!");
+            toast.success("Deposit submitted!");
             closeModal();
-            reloadPools();
-            loadSummary();
+
+            publicClient.waitForTransactionReceipt({ hash: depositTx, timeout: 60_000 })
+                .then((receipt) => {
+                    if (receipt.status === "reverted") {
+                        toast.error("Deposit transaction reverted on-chain");
+                    } else {
+                        console.log("[lp] deposit confirmed");
+                    }
+                })
+                .catch(() => {})
+                .finally(() => { reloadPools(); loadSummary(); });
         } catch (err: any) {
             const msg = err.shortMessage || err.message || "Transaction failed";
             console.error("[lp] deposit error:", msg, err);
@@ -279,9 +286,18 @@ export default function LPPage() {
             setTxStep("executing");
             await wallet.switchChain(137);
             const provider = await wallet.getEthereumProvider();
-            const transport = custom(provider);
-            const walletClient = createWalletClient({ chain: polygon, transport, account: wallet.address as Address });
-            const publicClient = createPublicClient({ chain: polygon, transport });
+            const walletTransport = custom(provider);
+            const walletClient = createWalletClient({ chain: polygon, transport: walletTransport, account: wallet.address as Address });
+            const publicClient = createPublicClient({ chain: polygon, transport: http() });
+
+            console.log("[lp] simulating withdraw...");
+            await publicClient.simulateContract({
+                address: LPPOOL_ADDRESS,
+                abi: LPPOOL_ABI,
+                functionName: "withdraw",
+                args: [modalPool.conditionId as `0x${string}`, shareAmount],
+                account: wallet.address as Address,
+            });
 
             console.log("[lp] sending withdraw tx...");
             const withdrawTx = await walletClient.writeContract({
@@ -291,13 +307,20 @@ export default function LPPage() {
                 args: [modalPool.conditionId as `0x${string}`, shareAmount],
             });
             console.log("[lp] withdraw tx sent:", withdrawTx);
-            await publicClient.waitForTransactionReceipt({ hash: withdrawTx });
-            console.log("[lp] withdraw confirmed");
 
-            toast.success("Withdrawal successful!");
+            toast.success("Withdraw submitted!");
             closeModal();
-            reloadPools();
-            loadSummary();
+
+            publicClient.waitForTransactionReceipt({ hash: withdrawTx, timeout: 60_000 })
+                .then((receipt) => {
+                    if (receipt.status === "reverted") {
+                        toast.error("Withdraw transaction reverted on-chain");
+                    } else {
+                        console.log("[lp] withdraw confirmed");
+                    }
+                })
+                .catch(() => {})
+                .finally(() => { reloadPools(); loadSummary(); });
         } catch (err: any) {
             const msg = err.shortMessage || err.message || "Transaction failed";
             console.error("[lp] withdraw error:", msg, err);
@@ -709,10 +732,14 @@ function Modal({
     onWithdraw: () => void;
 }) {
     const isDeposit = mode === "deposit";
-    const maxLabel = isDeposit ? usdcBalance : formatUnits(BigInt(userValue || "0"), USDC_DECIMALS);
+    const userValueUsd = Number(formatUnits(BigInt(userValue || "0"), USDC_DECIMALS));
+    const idleLiquidityUsd = Number(formatUnits(BigInt(pool.availableLiquidity || "0"), USDC_DECIMALS));
+    const withdrawMax = Math.min(userValueUsd, idleLiquidityUsd);
+    const maxLabel = isDeposit ? usdcBalance : String(withdrawMax);
     const maxUsd = maxLabel ? Number(maxLabel) : 0;
     const inputVal = Number(amount || "0");
     const canSubmit = (txStep === "idle" || txStep === "error") && inputVal > 0 && inputVal <= maxUsd;
+    const exceedsIdle = !isDeposit && inputVal > idleLiquidityUsd && inputVal > 0;
 
     const isPending = txStep === "approving" || txStep === "executing";
 
@@ -777,6 +804,13 @@ function Modal({
                             disabled={isPending}
                         />
                     </div>
+
+                    {/* Idle liquidity warning for withdrawals */}
+                    {exceedsIdle && (
+                        <div className="text-xs text-yellow-400 bg-yellow-400/10 rounded-lg px-3 py-2">
+                            Only {fmtUsd(pool.availableLiquidity)} is available to withdraw. The rest is currently lent to leveraged traders.
+                        </div>
+                    )}
 
                     {/* Error */}
                     {txError && (
