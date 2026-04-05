@@ -95,8 +95,13 @@ async function reconcileFailedRepayments(): Promise<{ repaid: number; failed: nu
             console.log(`[recovery] Repaid and settled position ${pos._id}`);
             repaid++;
         } catch (err: any) {
-            console.error(`[recovery] repayToPool retry failed for ${pos._id}:`, err.message);
-            failed++;
+            if (err.message?.includes("repay exceeds borrowed")) {
+                console.log(`[recovery] Already repaid for ${pos._id}, marking settled`);
+                await Position.updateOne({ _id: pos._id }, { $set: { settled: true } });
+            } else {
+                console.error(`[recovery] repayToPool retry failed for ${pos._id}:`, err.message);
+                failed++;
+            }
         }
     }
 
@@ -112,6 +117,14 @@ export async function reconcileAll(): Promise<{
     repayments: { repaid: number; failed: number };
 }> {
     console.log("[recovery] === FULL RECONCILIATION START ===");
+
+    const fixedCount = await Position.updateMany(
+        { status: "closed", borrowedAmount: { $gt: 0 }, settled: true },
+        { $set: { settled: false } },
+    );
+    if (fixedCount.modifiedCount > 0) {
+        console.log(`[recovery] Marked ${fixedCount.modifiedCount} closed position(s) as unsettled for LP repay retry`);
+    }
 
     const wallets: string[] = await Position.distinct("wallet");
     console.log(`[recovery] Found ${wallets.length} unique wallet(s) to check`);
